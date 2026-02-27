@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - devel
   workflow_call:
     inputs:
       upstream_tag:
@@ -154,9 +153,8 @@ jobs:
           platforms: arm64
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.23
+        uses: pypa/cibuildwheel@v3.3.1
         env:
-          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
           CIBW_MANYLINUX_I686_IMAGE: ${{ matrix.cibw_manylinux_image && format('quay.io/pypa/{0}_i686', matrix.cibw_manylinux_image) || '' }}
           CIBW_MANYLINUX_AARCH64_IMAGE: ${{ matrix.cibw_manylinux_image && format('quay.io/pypa/{0}_aarch64', matrix.cibw_manylinux_image) || '' }}
@@ -190,5 +188,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "v${{ needs.setup.outputs.version }}"
-          git push origin "v${{ needs.setup.outputs.version }}"
+          TAG="v${{ needs.setup.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping."
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi

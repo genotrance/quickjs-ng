@@ -29,11 +29,13 @@ dev = [
     "mypy>=1.19.1",
     "pytest-cov>=7.0.0",
     "ruff>=0.14.14",
-
 ]
 
 [tool.setuptools]
 packages = ["quickjs"]
+
+[tool.distutils.bdist_wheel]
+py_limited_api = "cp310"
 
 [build-system]
 requires = ["setuptools"]
@@ -108,7 +110,8 @@ preview = true
 before-build = "rm -rf {project}/build {project}/*.so {project}/_quickjs*"
 test-requires = ["pytest"]
 test-command = "pytest {project}/tests -q"
-enable = ["cpython-prerelease"]
+enable = ["pypy", "pypy-eol"]
+skip = ["cp*t-*"]
 
 [tool.coverage.report]
 skip_empty = true

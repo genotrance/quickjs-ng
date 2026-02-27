@@ -1,3 +1,5 @@
+// CPython Stable ABI target: 3.10+
+#define Py_LIMITED_API 0x030A0000
 #include <Python.h>
 #include <time.h>
 
@@ -19,7 +21,8 @@ typedef struct {
 
 // The data of the type _quickjs.Context.
 typedef struct {
-	PyObject_HEAD JSRuntime *runtime;
+	PyObject_HEAD
+	JSRuntime *runtime;
 	JSContext *context;
 	int has_time_limit;
 	clock_t time_limit;
@@ -39,6 +42,10 @@ typedef struct {
 	RuntimeData *runtime_data;
 	JSValue object;
 } ObjectData;
+
+// Type objects — populated in PyInit__quickjs via PyType_FromSpec.
+static PyObject *ObjectType = NULL;
+static PyObject *ContextType = NULL;
 
 // The exception raised by this module.
 static PyObject *JSException = NULL;
@@ -115,7 +122,8 @@ static int object_traverse(ObjectData *self, visitproc visit, void *arg) {
 
 // Creates an instance of the Object class.
 static PyObject *object_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
-	ObjectData *self = PyObject_GC_New(ObjectData, type);
+	allocfunc alloc = (allocfunc)PyType_GetSlot(type, Py_tp_alloc);
+	ObjectData *self = (ObjectData *)alloc(type, 0);
 	if (self != NULL) {
 		self->runtime_data = NULL;
 	}
@@ -124,14 +132,15 @@ static PyObject *object_new(PyTypeObject *type, PyObject *args, PyObject *kwds) 
 
 // Deallocates an instance of the Object class.
 static void object_dealloc(ObjectData *self) {
+	PyObject_GC_UnTrack(self);
 	if (self->runtime_data) {
-		PyObject_GC_UnTrack(self);
 		JS_FreeValue(self->runtime_data->context, self->object);
 		// We incremented the refcount of the runtime data when we created this object, so we should
 		// decrease it now so we don't leak memory.
 		Py_CLEAR(self->runtime_data);
 	}
-	PyObject_GC_Del(self);
+	freefunc free_fn = (freefunc)PyType_GetSlot(Py_TYPE(self), Py_tp_free);
+	free_fn((PyObject *)self);
 }
 
 // _quickjs.Object.__call__
@@ -140,7 +149,7 @@ static PyObject *object_call(ObjectData *self, PyObject *args, PyObject *kwds);
 // _quickjs.Object.json
 //
 // Returns the JSON representation of the object as a Python string.
-static PyObject *object_json(ObjectData *self) {
+static PyObject *object_json(ObjectData *self, PyObject *unused) {
 	JSContext *context = self->runtime_data->context;
 	JSValue json_string = JS_JSONStringify(context, self->object, JS_UNDEFINED, JS_UNDEFINED);
 	return quickjs_to_python(self->runtime_data, json_string);
@@ -152,17 +161,25 @@ static PyMethodDef object_methods[] = {
     {NULL} /* Sentinel */
 };
 
-// Define the quickjs.Object type.
-static PyTypeObject Object = {PyVarObject_HEAD_INIT(NULL, 0).tp_name = "_quickjs.Object",
-                              .tp_doc = "Quickjs object",
-                              .tp_basicsize = sizeof(ObjectData),
-                              .tp_itemsize = 0,
-                              .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
-                              .tp_traverse = (traverseproc)object_traverse,
-                              .tp_new = object_new,
-                              .tp_dealloc = (destructor)object_dealloc,
-                              .tp_call = (ternaryfunc)object_call,
-                              .tp_methods = object_methods};
+// Slot array for _quickjs.Object type spec.
+static PyType_Slot object_slots[] = {
+    {Py_tp_doc, "Quickjs object"},
+    {Py_tp_traverse, object_traverse},
+    {Py_tp_new, object_new},
+    {Py_tp_dealloc, object_dealloc},
+    {Py_tp_call, object_call},
+    {Py_tp_methods, object_methods},
+    {0, NULL}
+};
+
+// Type spec for _quickjs.Object.
+static PyType_Spec object_spec = {
+    "_quickjs.Object",
+    sizeof(ObjectData),
+    0,
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    object_slots
+};
 
 // Whether converting item to QuickJS would be possible.
 static int python_to_quickjs_possible(RuntimeData *runtime_data, PyObject *item) {
@@ -176,7 +193,7 @@ static int python_to_quickjs_possible(RuntimeData *runtime_data, PyObject *item)
 		return 1;
 	} else if (PyUnicode_Check(item)) {
 		return 1;
-	} else if (PyObject_IsInstance(item, (PyObject *)&Object)) {
+	} else if (PyObject_IsInstance(item, ObjectType)) {
 		ObjectData *object = (ObjectData *)item;
 		if (object->runtime_data != runtime_data) {
 			PyErr_Format(PyExc_ValueError, "Can not mix JS objects from different contexts.");
@@ -184,9 +201,12 @@ static int python_to_quickjs_possible(RuntimeData *runtime_data, PyObject *item)
 		}
 		return 1;
 	} else {
+		PyObject *type_obj = (PyObject *)Py_TYPE(item);
+		PyObject *type_name = PyObject_GetAttrString(type_obj, "__name__");
 		PyErr_Format(PyExc_TypeError,
-		             "Unsupported type when converting a Python object to quickjs: %s.",
-		             Py_TYPE(item)->tp_name);
+		             "Unsupported type when converting a Python object to quickjs: %U.",
+		             type_name);
+		Py_XDECREF(type_name);
 		return 0;
 	}
 }
@@ -214,8 +234,13 @@ static JSValueConst python_to_quickjs(RuntimeData *runtime_data, PyObject *item)
 	} else if (item == Py_None) {
 		return JS_NULL;
 	} else if (PyUnicode_Check(item)) {
-		return JS_NewString(runtime_data->context, PyUnicode_AsUTF8(item));
-	} else if (PyObject_IsInstance(item, (PyObject *)&Object)) {
+		Py_ssize_t size;
+		const char *utf8 = PyUnicode_AsUTF8AndSize(item, &size);
+		if (!utf8) {
+			return JS_UNDEFINED;
+		}
+		return JS_NewStringLen(runtime_data->context, utf8, (size_t)size);
+	} else if (PyObject_IsInstance(item, ObjectType)) {
 		return JS_DupValue(runtime_data->context, ((ObjectData *)item)->object);
 	} else {
 		// Can not happen if python_to_quickjs_possible passes.
@@ -232,7 +257,7 @@ static PyObject *object_call(ObjectData *self, PyObject *args, PyObject *kwds) {
 
 	// We first loop through all arguments and check that they are supported without doing anything.
 	// This makes the cleanup code simpler for the case where we have to raise an error.
-	const int nargs = PyTuple_Size(args);
+	const int nargs = (int)PyTuple_Size(args);
 	for (int i = 0; i < nargs; ++i) {
 		PyObject *item = PyTuple_GetItem(args, i);
 		if (!python_to_quickjs_possible(self->runtime_data, item)) {
@@ -241,7 +266,7 @@ static PyObject *object_call(ObjectData *self, PyObject *args, PyObject *kwds) {
 	}
 
 	// Now we know that all arguments are supported and we can convert them.
-	JSValueConst *jsargs;
+	JSValueConst *jsargs = NULL;
 	if (nargs) {
 		jsargs = js_malloc(self->runtime_data->context, nargs * sizeof(JSValueConst));
 		if (jsargs == NULL) {
@@ -329,13 +354,16 @@ static PyObject *quickjs_to_python(RuntimeData *runtime_data, JSValue value) {
 		JS_FreeCString(context, cstring);
 	} else if (tag == JS_TAG_OBJECT || tag == JS_TAG_MODULE || tag == JS_TAG_SYMBOL) {
 		// This is a Javascript object or function. We wrap it in a _quickjs.Object.
-		return_value = PyObject_CallObject((PyObject *)&Object, NULL);
+		return_value = PyObject_CallObject(ObjectType, NULL);
+		if (return_value == NULL) {
+			JS_FreeValue(context, value);
+			return NULL;
+		}
 		ObjectData *object = (ObjectData *)return_value;
 		// This is important. Otherwise, the context may be deallocated before the object, which
 		// will result in a segfault with high probability.
 		Py_INCREF(runtime_data);
 		object->runtime_data = runtime_data;
-		PyObject_GC_Track(object);
 		object->object = JS_DupValue(context, value);
 	} else {
 		PyErr_Format(PyExc_TypeError, "Unknown quickjs tag: %d", tag);
@@ -352,11 +380,6 @@ static PyObject *quickjs_to_python(RuntimeData *runtime_data, JSValue value) {
 static PyObject *test(PyObject *self, PyObject *args) {
 	return Py_BuildValue("i", 42);
 }
-
-// Global state of the module. Currently none.
-struct module_state {
-	int dummy;
-};
 
 // GC traversal.
 static int runtime_traverse(RuntimeData *self, visitproc visit, void *arg) {
@@ -432,7 +455,8 @@ static JSValue js_python_function_call(JSContext *ctx, JSValueConst func_obj,
 			tuple_success = 0;
 			break;
 		}
-		PyTuple_SET_ITEM(args, i, arg);
+		// PyTuple_SetItem steals the reference, matching our ownership of arg.
+		PyTuple_SetItem(args, i, arg);
 	}
 	if (!tuple_success) {
 		Py_DECREF(args);
@@ -467,7 +491,8 @@ static JSClassDef js_python_function_class = {
 
 // Creates an instance of the _quickjs.Context class.
 static PyObject *runtime_new(PyTypeObject *type, PyObject *args, PyObject *kwds) {
-	RuntimeData *self = PyObject_GC_New(RuntimeData, type);
+	allocfunc alloc = (allocfunc)PyType_GetSlot(type, Py_tp_alloc);
+	RuntimeData *self = (RuntimeData *)alloc(type, 0);
 	if (self != NULL) {
 		// We never have different contexts for the same runtime. This way, different
 		// _quickjs.Context can be used concurrently.
@@ -487,17 +512,17 @@ static PyObject *runtime_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 		self->thread_state = NULL;
 		self->python_callables = NULL;
 		JS_SetRuntimeOpaque(self->runtime, self);
-		PyObject_GC_Track(self);
 	}
 	return (PyObject *)self;
 }
 
 // Deallocates an instance of the _quickjs.Context class.
 static void runtime_dealloc(RuntimeData *self) {
+	PyObject_GC_UnTrack(self);
 	JS_FreeContext(self->context);
 	JS_FreeRuntime(self->runtime);
-	PyObject_GC_UnTrack(self);
-	PyObject_GC_Del(self);
+	freefunc free_fn = (freefunc)PyType_GetSlot(Py_TYPE(self), Py_tp_free);
+	free_fn((PyObject *)self);
 }
 
 // Evaluates a Python string as JS and returns the result as a Python object. Will return
@@ -532,7 +557,7 @@ static PyObject *runtime_module(RuntimeData *self, PyObject *args) {
 // _quickjs.Context.execute_pending_job
 //
 // If there are pending jobs, executes one and returns True. Else returns False.
-static PyObject *runtime_execute_pending_job(RuntimeData *self) {
+static PyObject *runtime_execute_pending_job(RuntimeData *self, PyObject *unused) {
 	prepare_call_js(self);
 	JSContext *ctx;
 	int ret = JS_ExecutePendingJob(self->runtime, &ctx);
@@ -645,8 +670,8 @@ static PyObject *runtime_set_max_stack_size(RuntimeData *self, PyObject *args) {
 
 // _quickjs.Context.memory
 //
-// Sets the CPU time limit of the context. This will be used in an interrupt handler.
-static PyObject *runtime_memory(RuntimeData *self) {
+// Returns the memory usage as a dict.
+static PyObject *runtime_memory(RuntimeData *self, PyObject *unused) {
 	PyObject *dict = PyDict_New();
 	if (dict == NULL) {
 		return NULL;
@@ -657,6 +682,8 @@ static PyObject *runtime_memory(RuntimeData *self) {
 	{                                                       \
 		PyObject *value = PyLong_FromLongLong(usage.key);   \
 		if (PyDict_SetItemString(dict, #key, value) != 0) { \
+			Py_DECREF(value);                               \
+			Py_DECREF(dict);                                \
 			return NULL;                                    \
 		}                                                   \
 		Py_DECREF(value);                                   \
@@ -693,7 +720,15 @@ static PyObject *runtime_memory(RuntimeData *self) {
 // _quickjs.Context.gc
 //
 // Runs garbage collection.
-static PyObject *runtime_gc(RuntimeData *self) {
+static PyObject *runtime_gc(RuntimeData *self, PyObject *unused) {
+	PyObject *gc_module = PyImport_ImportModule("gc");
+	if (gc_module) {
+		PyObject *result = PyObject_CallMethod(gc_module, "collect", NULL);
+		Py_XDECREF(result);
+		Py_DECREF(gc_module);
+	} else {
+		PyErr_Clear();
+	}
 	JS_RunGC(self->runtime);
 	Py_RETURN_NONE;
 }
@@ -793,18 +828,26 @@ static PyGetSetDef runtime_getsetters[] = {
     {NULL} /* Sentinel */
 };
 
-// Define the _quickjs.Context type.
-static PyTypeObject Context = {PyVarObject_HEAD_INIT(NULL, 0).tp_name = "_quickjs.Context",
-                               .tp_doc = "Quickjs context",
-                               .tp_basicsize = sizeof(RuntimeData),
-                               .tp_itemsize = 0,
-                               .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
-                               .tp_traverse = (traverseproc)runtime_traverse,
-                               .tp_clear = (inquiry)runtime_clear,
-                               .tp_new = runtime_new,
-                               .tp_dealloc = (destructor)runtime_dealloc,
-                               .tp_methods = runtime_methods,
-                               .tp_getset = runtime_getsetters};
+// Slot array for _quickjs.Context type spec.
+static PyType_Slot context_slots[] = {
+    {Py_tp_doc, "Quickjs context"},
+    {Py_tp_traverse, runtime_traverse},
+    {Py_tp_clear, runtime_clear},
+    {Py_tp_new, runtime_new},
+    {Py_tp_dealloc, runtime_dealloc},
+    {Py_tp_methods, runtime_methods},
+    {Py_tp_getset, runtime_getsetters},
+    {0, NULL}
+};
+
+// Type spec for _quickjs.Context.
+static PyType_Spec context_spec = {
+    "_quickjs.Context",
+    sizeof(RuntimeData),
+    0,
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    context_slots
+};
 
 // All global methods in _quickjs.
 static PyMethodDef myextension_methods[] = {{"test", (PyCFunction)test, METH_NOARGS, NULL},
@@ -812,9 +855,9 @@ static PyMethodDef myextension_methods[] = {{"test", (PyCFunction)test, METH_NOA
 
 // Define the _quickjs module.
 static struct PyModuleDef moduledef = {PyModuleDef_HEAD_INIT,
-                                       "quickjs",
+                                       "_quickjs",
                                        NULL,
-                                       sizeof(struct module_state),
+                                       -1,
                                        myextension_methods,
                                        NULL,
                                        NULL,
@@ -823,32 +866,49 @@ static struct PyModuleDef moduledef = {PyModuleDef_HEAD_INIT,
 
 // This function runs when the module is first imported.
 PyMODINIT_FUNC PyInit__quickjs(void) {
-	if (PyType_Ready(&Context) < 0) {
-		return NULL;
-	}
-	if (PyType_Ready(&Object) < 0) {
-		return NULL;
-	}
-
 	PyObject *module = PyModule_Create(&moduledef);
 	if (module == NULL) {
 		return NULL;
 	}
 
+	ObjectType = PyType_FromSpec(&object_spec);
+	if (ObjectType == NULL) {
+		Py_DECREF(module);
+		return NULL;
+	}
+
+	ContextType = PyType_FromSpec(&context_spec);
+	if (ContextType == NULL) {
+		Py_DECREF(module);
+		return NULL;
+	}
+
 	JSException = PyErr_NewException("_quickjs.JSException", NULL, NULL);
 	if (JSException == NULL) {
+		Py_DECREF(module);
 		return NULL;
 	}
 	StackOverflow = PyErr_NewException("_quickjs.StackOverflow", JSException, NULL);
 	if (StackOverflow == NULL) {
+		Py_DECREF(module);
 		return NULL;
 	}
 
-	Py_INCREF(&Context);
-	PyModule_AddObject(module, "Context", (PyObject *)&Context);
-	Py_INCREF(&Object);
-	PyModule_AddObject(module, "Object", (PyObject *)&Object);
-	PyModule_AddObject(module, "JSException", JSException);
-	PyModule_AddObject(module, "StackOverflow", StackOverflow);
+	if (PyModule_AddObjectRef(module, "Context", ContextType) < 0) {
+		Py_DECREF(module);
+		return NULL;
+	}
+	if (PyModule_AddObjectRef(module, "Object", ObjectType) < 0) {
+		Py_DECREF(module);
+		return NULL;
+	}
+	if (PyModule_AddObjectRef(module, "JSException", JSException) < 0) {
+		Py_DECREF(module);
+		return NULL;
+	}
+	if (PyModule_AddObjectRef(module, "StackOverflow", StackOverflow) < 0) {
+		Py_DECREF(module);
+		return NULL;
+	}
 	return module;
 }

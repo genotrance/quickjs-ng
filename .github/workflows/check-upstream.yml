@@ -2,13 +2,15 @@ name: Check upstream quickjs-ng
 
 on:
   schedule:
-    # Check daily at 06:00 UTC
-    - cron: "0 6 * * *"
+    # Check monthly on the 1st at 06:00 UTC
+    - cron: "0 6 1 * *"
   workflow_dispatch:
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
     steps:
       - uses: actions/checkout@v4
         with:

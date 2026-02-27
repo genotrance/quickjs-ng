@@ -4,6 +4,13 @@
 
 import contextlib
 import gc
+import sys
+
+if sys.implementation.name != "cpython":
+    import pytest
+
+    pytest.skip("tracemalloc is CPython-only", allow_module_level=True)
+
 import tracemalloc
 
 import quickjs
