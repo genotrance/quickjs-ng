@@ -153,7 +153,7 @@ jobs:
           platforms: arm64
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v3.3.1
+        uses: pypa/cibuildwheel@v3.4.0
         env:
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
           CIBW_MANYLINUX_I686_IMAGE: ${{ matrix.cibw_manylinux_image && format('quay.io/pypa/{0}_i686', matrix.cibw_manylinux_image) || '' }}
