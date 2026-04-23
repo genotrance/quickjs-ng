@@ -348,7 +348,7 @@ static PyObject *quickjs_to_python(RuntimeData *runtime_data, JSValue value) {
 		quickjs_exception_to_python(context);
 	} else if (tag == JS_TAG_FLOAT64) {
 		return_value = Py_BuildValue("d", JS_VALUE_GET_FLOAT64(value));
-	} else if (tag == JS_TAG_STRING) {
+	} else if (tag == JS_TAG_STRING || tag == JS_TAG_STRING_ROPE) {
 		const char *cstring = JS_ToCString(context, value);
 		return_value = Py_BuildValue("s", cstring);
 		JS_FreeCString(context, cstring);
