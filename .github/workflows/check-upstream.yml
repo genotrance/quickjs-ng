@@ -48,7 +48,7 @@ jobs:
 
       - name: Trigger build
         if: steps.check.outputs.needed == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             await github.rest.actions.createWorkflowDispatch({
