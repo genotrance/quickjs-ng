@@ -59,11 +59,32 @@ def _create_executor() -> concurrent.futures.ThreadPoolExecutor:
     return pool
 
 
+_shared_executor: concurrent.futures.ThreadPoolExecutor | None = None
+_shared_executor_lock = threading.Lock()
+
+
+def _get_shared_executor() -> concurrent.futures.ThreadPoolExecutor:
+    """Return the process-wide worker executor, creating it on first use.
+
+    This is created lazily rather than at import time on purpose: importing
+    ``quickjs`` must not spawn a worker thread. A non-daemon
+    ``ThreadPoolExecutor`` thread makes interpreter shutdown hang under gevent
+    (the ``concurrent.futures`` atexit handler joins the worker, but that join
+    blocks forever in gevent's hub). Code that only uses ``Context`` never
+    instantiates a ``Function`` and therefore never pays for the thread.
+    """
+    global _shared_executor
+    if _shared_executor is None:
+        with _shared_executor_lock:
+            if _shared_executor is None:
+                _shared_executor = _create_executor()
+    return _shared_executor
+
+
 class Function:
     # There are unit tests demonstrating that we are crashing if different threads are accessing the
     # same runtime, even if it is not at the same time. So we run everything on the same thread in
     # order to prevent this.
-    _threadpool = _create_executor()
 
     def __init__(self, name: str, code: str, *, own_executor: bool = False) -> None:
         """
@@ -74,8 +95,7 @@ class Function:
             own_executor: Create an executor specifically for this function. The default is False in
                           order to save system resources if a large number of functions are created.
         """
-        if own_executor:
-            self._threadpool = _create_executor()
+        self._threadpool = _create_executor() if own_executor else _get_shared_executor()
         self._lock = threading.Lock()
 
         future = self._threadpool.submit(self._compile, name, code)
