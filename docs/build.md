@@ -121,8 +121,28 @@ per version.
 
 ### Updated header list (sdist)
 
-The sdist `SOURCES.txt` was updated to match the quickjs-ng source tree:
-`libbf.h` and `VERSION` removed; `dtoa.h` added.
+When building an sdist, `setup.py` adds every `upstream-quickjs/*.h` file to the
+extension sources so that the sdist is self-contained. A glob is used rather
+than a fixed list because upstream adds headers between releases (v0.17.0
+needs `quickjs-c-atomics.h` and the `builtin-*.h` files); a fixed list would
+produce an sdist that fails to build after an upstream update.
+
+---
+
+## Updating the upstream submodule
+
+`upstream-quickjs` is pinned to an upstream tag, and `pyproject.toml` carries the
+matching `X.Y.Z.P` version (see [versioning.md](versioning.md)). Both are
+committed together on `main`, normally by `check-upstream.yml`, and
+`build.yml` builds exactly that commit without modifying either. Locally:
+
+```bash
+git submodule update --init
+git -C upstream-quickjs fetch --tags && git -C upstream-quickjs checkout v0.17.0
+# set version = "0.17.0.1" in pyproject.toml and the quickjs-ng entry in uv.lock
+uv sync && uv pip install -e . && uv run python -m pytest tests
+uv build   # sdist + wheel
+```
 
 ---
 

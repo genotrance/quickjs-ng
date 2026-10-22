@@ -6,74 +6,75 @@ on:
       - main
   workflow_call:
     inputs:
-      upstream_tag:
-        description: "Upstream quickjs-ng tag to build against"
-        required: true
+      sha:
+        description: "Commit SHA to build and release (defaults to the triggering commit)"
+        required: false
         type: string
+        default: ""
+      version:
+        description: "Expected wrapper version; the publish job fails if pyproject.toml at the SHA differs"
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
-      upstream_tag:
-        description: "Upstream quickjs-ng tag to build against (e.g. v0.12.1)"
-        required: true
+      sha:
+        description: "Commit SHA to build and release (defaults to the head of the selected ref)"
+        required: false
         type: string
+        default: ""
+      version:
+        description: "Expected wrapper version (e.g. 0.17.0.1); the publish job fails if pyproject.toml at the SHA differs"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   setup:
     runs-on: ubuntu-latest
     outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
       upstream_tag: ${{ steps.resolve.outputs.upstream_tag }}
       version: ${{ steps.resolve.outputs.version }}
       publish: ${{ steps.resolve.outputs.publish }}
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.sha || github.sha }}
           submodules: recursive
 
-      - name: Resolve tag and version
+      - name: Resolve commit, tag and version
         id: resolve
         shell: bash
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
         run: |
-          if [ -n "${{ inputs.upstream_tag }}" ]; then
-            # Called from workflow_call or workflow_dispatch with explicit tag
-            TAG="${{ inputs.upstream_tag }}"
-            cd upstream-quickjs
-            git fetch --tags
-            git checkout "$TAG"
-            cd ..
-          else
-            # Triggered by push — detect tag from submodule
-            cd upstream-quickjs
-            git fetch --tags
-            TAG=$(git tag --points-at HEAD --sort=-v:refname | head -1)
-            if [ -z "$TAG" ]; then
-              echo "No tag found at submodule HEAD, using latest tag"
-              TAG=$(git tag --sort=-v:refname | head -1)
-            fi
-            cd ..
+          # The commit is built exactly as checked out: pyproject.toml and the
+          # submodule pointer are never rewritten in the runner.
+          SHA=$(git rev-parse HEAD)
+          VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not read version from pyproject.toml at $SHA"
+            exit 1
+          fi
+          if [ -n "$EXPECTED_VERSION" ] && [ "$EXPECTED_VERSION" != "$VERSION" ]; then
+            echo "::error::Requested version $EXPECTED_VERSION differs from pyproject.toml version $VERSION at $SHA"
+            exit 1
           fi
 
-          UPSTREAM_VER="${TAG#v}"
-          CURRENT_VER=$(python3 -c "
-          import re, pathlib
-          text = pathlib.Path('pyproject.toml').read_text()
-          m = re.search(r'version = \"(.+?)\"', text)
-          print(m.group(1))
-          ")
-          CURRENT_BASE="${CURRENT_VER%.*}"
-          if [ "$CURRENT_BASE" = "$UPSTREAM_VER" ]; then
-            VERSION="$CURRENT_VER"
-          else
-            VERSION="${UPSTREAM_VER}.1"
+          # The submodule must sit on the upstream tag matching X.Y.Z of X.Y.Z.P
+          UPSTREAM_TAG="v${VERSION%.*}"
+          git -C upstream-quickjs fetch --tags origin
+          if ! git -C upstream-quickjs tag --points-at HEAD | grep -qx "$UPSTREAM_TAG"; then
+            echo "::error::upstream-quickjs at $SHA is not at tag $UPSTREAM_TAG (version $VERSION)"
+            exit 1
           fi
 
-          PUBLISH="false"
-          if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ github.event_name }}" = "workflow_call" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            PUBLISH="true"
-          fi
-
-          echo "upstream_tag=$TAG" >> $GITHUB_OUTPUT
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "publish=$PUBLISH" >> $GITHUB_OUTPUT
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "upstream_tag=$UPSTREAM_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "Building $SHA: version $VERSION, upstream $UPSTREAM_TAG"
 
   build-sdist:
     needs: setup
@@ -81,17 +82,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.setup.outputs.sha }}
           submodules: recursive
-
-      - name: Checkout upstream tag
-        run: |
-          cd upstream-quickjs
-          git fetch --tags
-          git checkout ${{ needs.setup.outputs.upstream_tag }}
-
-      - name: Set version
-        run: |
-          sed -i "s/^version = \".*\"/version = \"${{ needs.setup.outputs.version }}\"/" pyproject.toml
 
       - name: Build sdist
         run: pipx run build --sdist
@@ -133,18 +125,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.setup.outputs.sha }}
           submodules: recursive
-
-      - name: Checkout upstream tag
-        run: |
-          cd upstream-quickjs
-          git fetch --tags
-          git checkout ${{ needs.setup.outputs.upstream_tag }}
-
-      - name: Set version
-        shell: bash
-        run: |
-          sed -i.bak "s/^version = \".*\"/version = \"${{ needs.setup.outputs.version }}\"/" pyproject.toml
 
       - name: Set up QEMU
         if: matrix.arch == 'aarch64'
@@ -171,9 +153,14 @@ jobs:
     permissions:
       id-token: write
       contents: write
+    env:
+      SHA: ${{ needs.setup.outputs.sha }}
+      VERSION: ${{ needs.setup.outputs.version }}
+      EXPECTED_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ needs.setup.outputs.sha }}
           fetch-depth: 0
 
       - uses: actions/download-artifact@v8
@@ -181,17 +168,76 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Verify version before upload
+        run: |
+          PYPROJECT_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)
+          if [ "$PYPROJECT_VERSION" != "$VERSION" ]; then
+            echo "::error::Release version $VERSION differs from pyproject.toml version $PYPROJECT_VERSION at $SHA"
+            exit 1
+          fi
+          if [ -n "$EXPECTED_VERSION" ] && [ "$EXPECTED_VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "::error::Requested version $EXPECTED_VERSION differs from pyproject.toml version $PYPROJECT_VERSION at $SHA"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import os, pathlib, sys
+          version = os.environ["VERSION"]
+          files = sorted(p for p in pathlib.Path("dist").iterdir() if p.is_file())
+          if not files:
+              sys.exit("No distributions to publish")
+          bad = []
+          for p in files:
+              if p.name.endswith(".whl"):
+                  found = p.name.split("-")[1]
+              elif p.name.endswith(".tar.gz"):
+                  found = p.name[: -len(".tar.gz")].rsplit("-", 1)[1]
+              else:
+                  bad.append(f"{p.name}: unexpected file type")
+                  continue
+              if found != version:
+                  bad.append(f"{p.name}: version {found} != {version}")
+          if bad:
+              sys.exit("Distribution version mismatch:\n" + "\n".join(bad))
+          print(f"{len(files)} distributions all at version {version}")
+          PY
+
+      - name: Check if version is already on PyPI
+        id: pypi
+        run: |
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/quickjs-ng/$VERSION/json")
+          case "$STATUS" in
+            200) echo "exists=true" >> "$GITHUB_OUTPUT"; echo "::notice::quickjs-ng $VERSION is already on PyPI, skipping upload" ;;
+            404) echo "exists=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Unexpected HTTP status $STATUS from PyPI"; exit 1 ;;
+          esac
+
       - name: Publish to PyPI
+        id: upload
+        if: steps.pypi.outputs.exists == 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
 
       - name: Create and push tag
+        if: steps.upload.outcome == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          TAG="v${{ needs.setup.outputs.version }}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists, skipping."
+          TAG="v$VERSION"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            if [ "$(git rev-parse "$TAG^{commit}")" = "$SHA" ]; then
+              echo "Tag $TAG already points at $SHA, skipping."
+            else
+              echo "::error::Tag $TAG already exists at a different commit"
+              exit 1
+            fi
           else
-            git tag "$TAG"
-            git push origin "$TAG"
+            git tag "$TAG" "$SHA"
+            git push origin "refs/tags/$TAG"
+          fi
+
+      - name: Note missing tag for an already published version
+        if: steps.pypi.outputs.exists == 'true'
+        run: |
+          TAG="v$VERSION"
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::warning::$VERSION is on PyPI but tag $TAG does not exist; tag the released commit manually if needed"
           fi

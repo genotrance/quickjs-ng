@@ -9,8 +9,8 @@ Three workflows live under `.github/workflows/`:
 | File | Trigger | Purpose |
 |------|---------|---------|
 | `main.yml` | Push + PR to `main`/`devel` | Fast regression feedback (pytest) |
-| `build.yml` | Push to `main`, `workflow_call`, `workflow_dispatch` | Build abi3 wheels + sdist, publish to PyPI |
-| `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` | Detect new quickjs-ng upstream tags, trigger `build.yml` |
+| `build.yml` | Push to `main`, `workflow_call`, `workflow_dispatch` | Build abi3 wheels + sdist of an exact commit, publish to PyPI, tag |
+| `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` | Detect new quickjs-ng upstream tags, commit the update to `main`, dispatch `build.yml` at that commit |
 
 ---
 
@@ -44,20 +44,23 @@ pytest directly. This gives fast feedback on every push.
 
 ### Triggers
 
-| Event | When | `publish` flag |
-|-------|------|---------------|
-| Push to `main` | Direct push | `true` |
-| `workflow_call` | Triggered by `check-upstream.yml` | `true` |
-| `workflow_dispatch` | Manual trigger with `upstream_tag` input | `true` |
+| Event | Commit built | Inputs |
+|-------|--------------|--------|
+| Push to `main` | The pushed commit | none |
+| `workflow_call` | `sha` input (default: triggering commit) | `sha`, `version` (both optional) |
+| `workflow_dispatch` | `sha` input (default: head of the selected ref) | `sha`, `version` (both optional) |
+
+`check-upstream.yml` dispatches `build.yml` with the SHA and version of the
+commit it just pushed. The commit is built as is: `pyproject.toml` and the
+submodule pointer are not modified in the runner.
 
 ### Jobs
 
-**`setup`** — Resolves the upstream tag and wrapper version:
-- If called with `upstream_tag` input (via `workflow_call` / `workflow_dispatch`):
-  checks out that tag in the submodule.
-- If triggered by push: detects the tag at the current submodule HEAD.
-- Computes the wrapper version (see [versioning.md](versioning.md)).
-- Outputs: `upstream_tag`, `version`, `publish`.
+**`setup`** — Checks out the commit and reads the wrapper version from
+`pyproject.toml`. Fails if the `version` input differs or if the submodule is
+not at the upstream tag `vX.Y.Z` matching the version
+(see [versioning.md](versioning.md)).
+Outputs: `sha`, `upstream_tag`, `version`, `publish`.
 
 **`build-sdist`** — Builds a source distribution with `pipx run build --sdist`.
 
@@ -65,8 +68,16 @@ pytest directly. This gives fast feedback on every push.
 `cibuildwheel@v2.23` with `CIBW_BUILD: "cp310-*"`. Produces one `cp310-abi3`
 wheel per platform.
 
-**`publish`** — Downloads all artifacts, publishes to PyPI via Trusted Publishing
-(OIDC, `id-token: write`), and creates + pushes a git tag.
+**`publish`** — Downloads all artifacts and, in order:
+1. Fails if the version differs from `pyproject.toml` at the commit (or from
+   the `version` input), or if any built file has a different version.
+2. Queries PyPI; if the version already exists the upload is skipped
+   (a warning is logged if its `vX.Y.Z.P` tag is missing).
+3. Publishes to PyPI via Trusted Publishing (OIDC, `id-token: write`).
+4. Only after a successful upload, tags the built commit `vX.Y.Z.P` and pushes
+   the tag (fails if the tag exists on a different commit).
+
+Re-running the workflow for the same commit is safe.
 
 ### Build matrix
 
@@ -134,17 +145,34 @@ Runs monthly on the 1st at 06:00 UTC, and on `workflow_dispatch`.
 
 ### How it works
 
-1. Checks out the repo with submodules.
-2. Gets the current `upstream-quickjs` submodule SHA.
-3. Fetches all tags from `upstream-quickjs` origin and finds the latest by semver.
-4. Compares SHAs:
-   - Equal → already up to date, exit.
-   - Different → triggers `build.yml` via `createWorkflowDispatch` with the new tag.
+1. Checks out `main` with submodules and all tags.
+2. Finds the latest stable upstream tag (`vX.Y.Z`) with `git ls-remote`.
+3. Determines what has been released: the newest of the repository's `vX.Y.Z.P`
+   tags and the latest version on PyPI. Its `X.Y.Z` part is the released base.
+4. If the upstream version is newer than the released base, a release is needed
+   (the committed submodule is not used for this decision, so a committed but
+   unreleased bump is retried).
+5. Updates `upstream-quickjs` to the upstream tag and `pyproject.toml` /
+   `uv.lock` to `X.Y.Z.1` (or keeps the version if `main` already has that
+   upstream's bump), commits `Update upstream quickjs-ng to vX.Y.Z (version
+   X.Y.Z.P)` and pushes it to `main`. No commit is made if nothing changed.
+6. Dispatches `build.yml` on `main` with `sha` set to the resulting `HEAD` and
+   `version` set to the new version.
 
 ```
-current submodule SHA == latest tag SHA  →  no action
-current submodule SHA != latest tag SHA  →  trigger build.yml with latest tag
+upstream version <= released base  →  no action
+upstream version >  released base  →  commit bump to main, dispatch build.yml at that SHA
 ```
+
+Retries: if any step fails, re-run the workflow. An already committed bump is
+reused and `build.yml` skips PyPI upload for versions that are already published.
+
+The push uses `GITHUB_TOKEN`, which does not trigger other workflows, so the
+push does not start `build.yml` or `main.yml` by itself; the explicit dispatch
+(which is allowed for `GITHUB_TOKEN`) starts the build. `main.yml` therefore
+does not run for the bump commit; the wheel builds run the test suite through
+cibuildwheel. If `main` has branch protection, the Actions bot must be allowed
+to push to it.
 
 ### Required permissions
 
@@ -152,7 +180,8 @@ current submodule SHA != latest tag SHA  →  trigger build.yml with latest tag
 jobs:
   check:
     permissions:
-      actions: write   # required to call createWorkflowDispatch
+      actions: write    # required to call createWorkflowDispatch
+      contents: write   # required to push the bump commit to main
 ```
 
 The `GITHUB_TOKEN` for scheduled workflows defaults to read-only. Without
@@ -161,10 +190,9 @@ integration`.
 
 ### Target branch
 
-The dispatch targets `ref: 'main'` — the stable branch that triggers publishing.
-While the project is on `devel`, run the workflow manually via `workflow_dispatch`
-to test it (it targets whichever branch the workflow file is on for the dispatch
-call, but `build.yml` will be dispatched against `main` once it exists).
+The bump is committed to `main` and the dispatch targets `ref: 'main'` — the
+stable branch that triggers publishing. The workflow always checks out `main`,
+whichever branch the workflow run itself was started from.
 
 ### Testing the workflow manually
 

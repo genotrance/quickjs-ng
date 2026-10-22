@@ -6,49 +6,107 @@ on:
     - cron: "0 6 1 * *"
   workflow_dispatch:
 
+concurrency:
+  group: check-upstream
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
     permissions:
       actions: write
+      contents: write
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: main
           submodules: recursive
           fetch-depth: 0
-
-      - name: Get current submodule commit
-        id: current
-        run: |
-          CURRENT_SHA=$(git -C upstream-quickjs rev-parse HEAD)
-          echo "sha=$CURRENT_SHA" >> $GITHUB_OUTPUT
 
       - name: Get latest upstream tag
         id: upstream
         run: |
-          cd upstream-quickjs
-          git fetch --tags origin
-          LATEST_TAG=$(git tag --sort=-v:refname | head -1)
-          LATEST_SHA=$(git rev-parse "$LATEST_TAG")
-          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
-          echo "sha=$LATEST_SHA" >> $GITHUB_OUTPUT
-          echo "Latest upstream tag: $LATEST_TAG ($LATEST_SHA)"
-          echo "Current submodule:   ${{ steps.current.outputs.sha }}"
+          TAG=$(git ls-remote --tags --refs https://github.com/quickjs-ng/quickjs 'v*' \
+            | sed 's#.*refs/tags/##' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V | tail -1)
+          if [ -z "$TAG" ]; then
+            echo "::error::No upstream release tag found"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "Latest upstream tag: $TAG"
 
-      - name: Check if update needed
-        id: check
+      - name: Get latest released version
+        id: released
         run: |
-          if [ "${{ steps.current.outputs.sha }}" = "${{ steps.upstream.outputs.sha }}" ]; then
-            echo "needed=false" >> $GITHUB_OUTPUT
-            echo "Already up to date with ${{ steps.upstream.outputs.tag }}"
+          # Latest release according to git tags (vX.Y.Z.P) ...
+          TAG_VER=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*.[0-9]*' | sed 's/^v//' | sort -V | tail -1)
+          # ... and according to PyPI. The newest of the two wins.
+          PYPI_VER=$(curl -fsSL https://pypi.org/pypi/quickjs-ng/json \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["info"]["version"])' \
+            || true)
+          RELEASED=$(printf '%s\n' "$TAG_VER" "$PYPI_VER" | sed '/^$/d' | sort -V | tail -1)
+          echo "Latest git tag: ${TAG_VER:-none}, latest PyPI: ${PYPI_VER:-none}"
+          echo "version=$RELEASED" >> "$GITHUB_OUTPUT"
+          echo "base=${RELEASED%.*}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if release needed
+        id: check
+        env:
+          UPSTREAM: ${{ steps.upstream.outputs.version }}
+          RELEASED_BASE: ${{ steps.released.outputs.base }}
+        run: |
+          NEWEST=$(printf '%s\n' "$UPSTREAM" "${RELEASED_BASE:-0.0.0}" | sort -V | tail -1)
+          if [ "$UPSTREAM" = "${RELEASED_BASE}" ] || [ "$NEWEST" != "$UPSTREAM" ]; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "Already released: upstream $UPSTREAM, released base ${RELEASED_BASE:-none}"
           else
-            echo "needed=true" >> $GITHUB_OUTPUT
-            echo "New upstream tag available: ${{ steps.upstream.outputs.tag }}"
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+            echo "Release needed: upstream $UPSTREAM, released base ${RELEASED_BASE:-none}"
           fi
 
-      - name: Trigger build
+      - name: Commit upstream update to main
+        id: commit
+        if: steps.check.outputs.needed == 'true'
+        env:
+          TAG: ${{ steps.upstream.outputs.tag }}
+          UPSTREAM: ${{ steps.upstream.outputs.version }}
+        run: |
+          git -C upstream-quickjs fetch --tags origin
+          git -C upstream-quickjs checkout --detach "$TAG"
+
+          CURRENT_VER=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)
+          if [ "${CURRENT_VER%.*}" = "$UPSTREAM" ]; then
+            # Already bumped (e.g. an earlier run committed but did not release): keep the wrapper patch
+            VERSION="$CURRENT_VER"
+          else
+            VERSION="${UPSTREAM}.1"
+          fi
+
+          sed -i "0,/^version = \".*\"/s//version = \"$VERSION\"/" pyproject.toml
+          # Keep uv.lock in sync (CI runs `uv lock --locked`)
+          sed -i "/^name = \"quickjs-ng\"\$/{n;s/^version = .*/version = \"$VERSION\"/}" uv.lock
+
+          git add upstream-quickjs pyproject.toml uv.lock
+          if git diff --cached --quiet; then
+            echo "main already contains $TAG and version $VERSION"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit -m "Update upstream quickjs-ng to $TAG (version $VERSION)"
+            git push origin HEAD:main
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger build at the committed SHA
         if: steps.check.outputs.needed == 'true'
         uses: actions/github-script@v8
+        env:
+          BUILD_SHA: ${{ steps.commit.outputs.sha }}
+          BUILD_VERSION: ${{ steps.commit.outputs.version }}
         with:
           script: |
             await github.rest.actions.createWorkflowDispatch({
@@ -57,6 +115,7 @@ jobs:
               workflow_id: 'build.yml',
               ref: 'main',
               inputs: {
-                upstream_tag: '${{ steps.upstream.outputs.tag }}'
+                sha: process.env.BUILD_SHA,
+                version: process.env.BUILD_VERSION
               }
             });

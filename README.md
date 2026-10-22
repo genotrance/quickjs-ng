@@ -81,7 +81,7 @@ Each `Context` owns an isolated QuickJS runtime — there is no shared state bet
 
 ## Versioning
 
-Version format is `X.Y.Z.P` where `X.Y.Z` matches the upstream quickjs-ng tag and `P` is the wrapper patch (starts at 1 per upstream release). Wheels are built automatically when a new upstream tag is detected.
+Version format is `X.Y.Z.P` where `X.Y.Z` matches the upstream quickjs-ng tag and `P` is the wrapper patch (starts at 1 per upstream release). When a new upstream tag is detected, the submodule and version bump are committed to `main` and wheels are built and published from exactly that commit.
 
 ## Development
 

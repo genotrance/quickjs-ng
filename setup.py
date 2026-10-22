@@ -1,3 +1,4 @@
+import glob
 import sys
 import sysconfig as _sc
 
@@ -33,18 +34,7 @@ def get_c_sources(include_headers=False):
         "upstream-quickjs/quickjs.c",
     ]
     if include_headers:
-        sources += [
-            "upstream-quickjs/cutils.h",
-            "upstream-quickjs/dtoa.h",
-            "upstream-quickjs/libregexp-opcode.h",
-            "upstream-quickjs/libregexp.h",
-            "upstream-quickjs/libunicode-table.h",
-            "upstream-quickjs/libunicode.h",
-            "upstream-quickjs/list.h",
-            "upstream-quickjs/quickjs-atom.h",
-            "upstream-quickjs/quickjs-opcode.h",
-            "upstream-quickjs/quickjs.h",
-        ]
+        sources += sorted(glob.glob("upstream-quickjs/*.h"))
     return sources
 
 
