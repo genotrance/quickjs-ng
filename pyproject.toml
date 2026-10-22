@@ -1,6 +1,6 @@
 [project]
 name = "quickjs-ng"
-version = "0.17.0.1"
+version = "0.17.0.2"
 description = "Thin Python wrapper of quickjs-ng"
 authors = [{ name = "Ganesh Viswanathan", email = "dev@genotrance.com" }]
 readme = "README.md"
