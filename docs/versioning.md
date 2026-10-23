@@ -15,11 +15,11 @@ Examples:
 | Second wrapper-only fix for `v0.12.1` | `0.12.1.2` |
 | Build after upstream bumps to `v0.12.2` | `0.12.2.1` |
 
-The version in `pyproject.toml` is the source of truth. It is committed to
-`main` together with the `upstream-quickjs` submodule pointer; the build
-workflow never rewrites it. A release always corresponds to one commit on
-`main` whose `pyproject.toml` version is `X.Y.Z.P` and whose submodule is at the
-upstream tag `vX.Y.Z`.
+The version in `pyproject.toml` is the source of truth. Development changes and
+wrapper version bumps are made on `devel`; a release merges `devel` into `main`
+with the `upstream-quickjs` submodule pointer. The build workflow never rewrites
+these files. A release commit's `pyproject.toml` version is `X.Y.Z.P` and its
+submodule is at the upstream tag `vX.Y.Z`.
 
 `uv.lock` records the project version as well (CI runs `uv lock --locked`), so
 it is updated in the same commit.
@@ -43,7 +43,7 @@ it is updated in the same commit.
 If `main` already carries the bump for that upstream tag (for example an
 earlier run committed it but the build failed), the commit is skipped and the
 build is dispatched for the current `main` head, keeping the existing wrapper
-patch.
+patch. Merge `main` back into `devel` after the automatic release.
 
 Manual equivalent:
 
@@ -56,10 +56,11 @@ git commit -m "Update upstream quickjs-ng to v0.17.0 (version 0.17.0.1)"
 
 ### Wrapper-only fix (manual)
 
-Increment `P` in `pyproject.toml` (and `uv.lock`) in the same commit as the fix,
-e.g. `0.17.0.1` to `0.17.0.2`, and push to `main`. `build.yml` runs on the push
-and publishes the new version. Without the bump the build still runs, but the
-publish job finds the version already on PyPI and skips the upload.
+Increment `P` in `pyproject.toml` (and `uv.lock`) in the same commit as the fix
+on `devel`, e.g. `0.17.0.1` to `0.17.0.2`, then merge `devel` into `main`.
+`build.yml` runs on the merge and publishes the new version. Without the bump
+the build still runs, but the publish job finds the version already on PyPI and
+skips the upload.
 
 ---
 

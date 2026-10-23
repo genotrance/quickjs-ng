@@ -14,6 +14,15 @@ Three workflows live under `.github/workflows/`:
 
 ---
 
+## Branch flow
+
+`devel` is the development branch: pull requests, Dependabot updates, and fixes
+target it. A release bumps the wrapper version on `devel` and merges `devel`
+into `main`; that merge triggers `build.yml`, which publishes and tags the
+release commit. The monthly upstream check still commits its update to `main`;
+merge `main` back into `devel` afterwards so development includes the upstream
+release.
+
 ## CI (`main.yml`)
 
 Runs `pytest` across Python 3.10–3.14 and PyPy 3.10/3.11 on Ubuntu, Windows,
