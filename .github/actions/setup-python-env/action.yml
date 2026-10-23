@@ -28,7 +28,7 @@ runs:
 
     - name: Install dependencies and build C extension
       run: |
-        uv sync
+        uv sync --locked
         uv pip install setuptools
         uv pip install -e .
       shell: bash
