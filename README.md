@@ -81,7 +81,7 @@ Each `Context` owns an isolated QuickJS runtime — there is no shared state bet
 
 ## Versioning
 
-Version format is `X.Y.Z.P` where `X.Y.Z` matches the upstream quickjs-ng tag and `P` is the wrapper patch (starts at 1 per upstream release). When a new upstream tag is detected, the submodule and version bump are committed to `main` and wheels are built and published from exactly that commit.
+Version format is `X.Y.Z.P` where `X.Y.Z` matches the upstream quickjs-ng tag and `P` is the wrapper patch (starts at 1 per upstream release). Development, Dependabot updates, and fixes target `devel`. A release bumps the wrapper version on `devel`, then merges `devel` into `main`, where wheels are built and published from exactly that commit. The monthly upstream check commits to `main`; merge `main` back into `devel` afterwards.
 
 ## Development
 
@@ -109,9 +109,13 @@ Bug reports and pull requests are welcome at <https://github.com/genotrance/quic
 
 1. Fork and clone with `--recurse-submodules`.
 2. Run `make install` to set up the venv, build the C extension, and install pre-commit hooks.
-3. Create a feature branch, make changes, add tests in `tests/`.
+3. Create a feature branch from `devel`, make changes, add tests in `tests/`.
 4. Run `make check && make test` — all checks must pass.
-5. Open a pull request. CI runs on Ubuntu, Windows, and macOS across Python 3.10–3.14 (including free-threaded 3.13t/3.14t) and PyPy 3.10/3.11.
+5. Open a pull request to `devel`. CI runs on Ubuntu, Windows, and macOS across Python 3.10–3.14 (including free-threaded 3.13t/3.14t) and PyPy 3.10/3.11.
+
+Dependabot updates and fixes also target `devel`. For a release, bump the
+wrapper version there and merge `devel` into `main`; after the automatic
+upstream release, merge `main` back into `devel`.
 
 ## Documentation
 
