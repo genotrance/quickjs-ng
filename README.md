@@ -137,3 +137,9 @@ The porting to quickjs-ng, the stable ABI migration, the expanded test suite, CI
 ## License
 
 MIT
+
+## Fork safety
+
+Create `quickjs.Function` objects (and `own_executor=True` executors) after
+`fork()`. A child forked after first use inherits a dead worker thread and
+hangs; `spawn`/`forkserver` are fine. See `docs/threading.md`.

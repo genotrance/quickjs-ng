@@ -254,3 +254,58 @@ class ContextPerThread(unittest.TestCase):
             self.assertEqual(ctx.eval("result"), 42)
 
         self._run_in_threads(work)
+
+
+class ExecutorCreationRaces(unittest.TestCase):
+    def _run_concurrently(self, fns):
+        barrier = threading.Barrier(len(fns))
+        results = [None] * len(fns)
+
+        def run(i, fn):
+            barrier.wait()
+            results[i] = fn()
+
+        threads = [threading.Thread(target=run, args=(i, f)) for i, f in enumerate(fns)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        return results
+
+    def test_concurrent_first_creation_single_shared_executor(self):
+        code = (
+            "import threading, quickjs\n"
+            "b = threading.Barrier(8)\n"
+            "fs = []\n"
+            "def mk():\n"
+            "    b.wait(); fs.append(quickjs.Function('f', 'function f(){return 1}'))\n"
+            "ts = [threading.Thread(target=mk) for _ in range(8)]\n"
+            "[t.start() for t in ts]; [t.join() for t in ts]\n"
+            "assert len({id(f._threadpool) for f in fs}) == 1\n"
+            "assert quickjs._executor_count == 1, quickjs._executor_count\n"
+        )
+        subprocess.run([sys.executable, "-c", code], check=True)
+
+    def test_concurrent_shared_and_own_keep_stack_size(self):
+        code = (
+            "import threading, quickjs\n"
+            "before = threading.stack_size()\n"
+            "b = threading.Barrier(8)\n"
+            "fs = []\n"
+            "def mk(own):\n"
+            "    b.wait(); fs.append(quickjs.Function('f', 'function f(){return 1}', own_executor=own))\n"
+            "ts = [threading.Thread(target=mk, args=(i % 2 == 0,)) for i in range(8)]\n"
+            "[t.start() for t in ts]; [t.join() for t in ts]\n"
+            "assert threading.stack_size() == before\n"
+            "assert all(len(f._threadpool._threads) == 1 for f in fs)\n"
+            "assert all(f() == 1 for f in fs)\n"
+        )
+        subprocess.run([sys.executable, "-c", code], check=True)
+
+    def test_no_worker_after_import_or_context(self):
+        code = (
+            "import threading, quickjs\n"
+            "quickjs.Context().eval('1+1')\n"
+            "assert threading.active_count() == 1, threading.enumerate()\n"
+        )
+        subprocess.run([sys.executable, "-c", code], check=True)
