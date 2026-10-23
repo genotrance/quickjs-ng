@@ -72,10 +72,12 @@ jobs:
             exit 1
           fi
 
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "upstream_tag=$UPSTREAM_TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "publish=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "sha=$SHA"
+            echo "upstream_tag=$UPSTREAM_TAG"
+            echo "version=$VERSION"
+            echo "publish=true"
+          } >> "$GITHUB_OUTPUT"
 
           # A push to main whose version is already on PyPI is a no-op here:
           # main.yml tests every push, so skip the wheel builds and publish.
