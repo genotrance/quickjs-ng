@@ -2,6 +2,8 @@
 
 import concurrent.futures
 import json
+import subprocess
+import sys
 import threading
 import unittest
 
@@ -63,6 +65,34 @@ class FunctionThreads(unittest.TestCase):
         expected = sum(data)
         for future in concurrent.futures.as_completed(futures):
             self.assertEqual(future.result(), expected)
+
+
+class LazyExecutor(unittest.TestCase):
+    """The worker executor must be created lazily, not at import time.
+
+    A non-daemon ThreadPoolExecutor thread created at import deadlocks
+    interpreter shutdown under gevent (the concurrent.futures atexit join never
+    completes in gevent's hub). Importing quickjs and using Context must spawn no
+    worker thread; only creating a Function does.
+    """
+
+    def _worker_thread_count(self, snippet):
+        code = (
+            "import threading, quickjs\n"
+            + snippet
+            + "\nprint(sum('quickjs-worker' in t.name for t in threading.enumerate()))\n"
+        )
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return int(out.stdout.strip().splitlines()[-1])
+
+    def test_import_and_context_spawn_no_worker(self):
+        self.assertEqual(self._worker_thread_count("quickjs.Context().eval('1 + 1')"), 0)
+
+    def test_function_creates_worker(self):
+        self.assertGreaterEqual(
+            self._worker_thread_count("quickjs.Function('f', 'function f(){ return 1; }')"), 1
+        )
 
 
 class ContextPerThread(unittest.TestCase):
