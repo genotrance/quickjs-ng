@@ -71,11 +71,17 @@ wheel per platform.
 **`publish`** — Downloads all artifacts and, in order:
 1. Fails if the version differs from `pyproject.toml` at the commit (or from
    the `version` input), or if any built file has a different version.
-2. Queries PyPI; if the version already exists the upload is skipped
-   (a warning is logged if its `vX.Y.Z.P` tag is missing).
+2. Queries PyPI; if the version already exists the upload and tagging are
+   skipped (a notice names the commit the existing `vX.Y.Z.P` tag points at; a
+   warning is logged if the tag is missing). On `push` events the `setup` job
+   also checks PyPI and, when the version is already published, skips the sdist
+   and wheel builds and the publish job entirely (output `build=false`), so
+   later pushes to `main` (Dependabot, lock or docs changes) are a no-op;
+   `main.yml` already tests every push. `workflow_dispatch` and `workflow_call`
+   (check-upstream) always build.
 3. Publishes to PyPI via Trusted Publishing (OIDC, `id-token: write`).
 4. Only after a successful upload, tags the built commit `vX.Y.Z.P` and pushes
-   the tag (fails if the tag exists on a different commit).
+   the tag.
 
 Re-running the workflow for the same commit is safe.
 
