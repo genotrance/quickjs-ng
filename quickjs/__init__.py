@@ -29,6 +29,7 @@ StackOverflow = _quickjs.StackOverflow
 # consistent across glibc, musl, and Windows.
 _THREAD_STACK_SIZE = 8 * 1024 * 1024  # 8 MB, matches glibc default
 _executor_count = 0
+_executor_lock = threading.Lock()
 
 
 def _create_executor() -> concurrent.futures.ThreadPoolExecutor:
@@ -45,22 +46,23 @@ def _create_executor() -> concurrent.futures.ThreadPoolExecutor:
     works the same way.
     """
     global _executor_count
-    _executor_count += 1
-    prefix = f"quickjs-worker-{_executor_count}"
-    old = threading.stack_size()
-    try:
-        threading.stack_size(_THREAD_STACK_SIZE)
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix=prefix)
-        # ThreadPoolExecutor creates threads lazily.  Submit a no-op so the
-        # worker is spawned *now*, while the enlarged stack size is in effect.
-        pool.submit(lambda: None).result()
-    finally:
-        threading.stack_size(old)
-    return pool
+    with _executor_lock:
+        _executor_count += 1
+        prefix = f"quickjs-worker-{_executor_count}"
+        old = threading.stack_size()
+        try:
+            threading.stack_size(_THREAD_STACK_SIZE)
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix=prefix)
+            # ThreadPoolExecutor creates threads lazily.  Submit a no-op so the
+            # worker is spawned *now*, while the enlarged stack size is in effect.
+            pool.submit(lambda: None).result()
+        finally:
+            threading.stack_size(old)
+        return pool
 
 
 _shared_executor: concurrent.futures.ThreadPoolExecutor | None = None
-_shared_executor_lock = threading.Lock()
+_shared_executor_lock = threading.Lock()  # guards only the shared-executor check; creation takes _executor_lock
 
 
 def _get_shared_executor() -> concurrent.futures.ThreadPoolExecutor:

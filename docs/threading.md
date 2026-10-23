@@ -103,3 +103,11 @@ class Function:
         if own_executor:
             self._threadpool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 ```
+
+## Fork limitation
+
+`Function` objects and executors must be created after `fork()`. The worker
+thread does not survive a fork, so a child forked after the first `Function`
+use inherits a dead worker and hangs on its first call. The `spawn` and
+`forkserver` start methods are safe. Executor creation (including
+`threading.stack_size` changes) is serialized by one module-level lock.
