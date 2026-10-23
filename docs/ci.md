@@ -205,3 +205,9 @@ Then watch:
 ```bash
 gh run watch --repo genotrance/quickjs-ng
 ```
+
+## Lock file enforcement
+
+The setup action uses `uv sync --locked` and the test step uses
+`uv run --locked`; CI fails if `uv.lock` is out of date. Dependabot's `uv`
+ecosystem (monthly, minor/patch grouped) proposes upgrades.

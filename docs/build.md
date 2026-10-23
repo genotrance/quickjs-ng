@@ -172,3 +172,10 @@ Free-threaded builds are still tested in `main.yml`.
 **Total: 19 wheels** — 7 CPython abi3 wheels (one per platform/arch, each
 covers Python 3.10+) plus 12 PyPy wheels (pypy3.10 and pypy3.11 per
 platform/arch, manylinux only — PyPy has no musllinux support).
+
+## Dependency lock
+
+`uv.lock` is tracked in git and CI runs `uv sync --locked` / `uv run --locked`,
+so a stale lock fails the build. Dependabot opens grouped monthly PRs for
+routine upgrades. To upgrade manually, run `uv lock --upgrade` (or
+`uv lock --upgrade-package <name>`), run the tests, and commit `uv.lock`.
