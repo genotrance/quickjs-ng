@@ -334,7 +334,7 @@ static PyObject *quickjs_to_python(RuntimeData *runtime_data, JSValue value) {
 
 	if (tag == JS_TAG_INT) {
 		return_value = Py_BuildValue("i", JS_VALUE_GET_INT(value));
-	} else if (tag == JS_TAG_BIG_INT) {
+	} else if (tag == JS_TAG_BIG_INT || tag == JS_TAG_SHORT_BIG_INT) {
 		const char *cstring = JS_ToCString(context, value);
 		return_value = PyLong_FromString(cstring, NULL, 10);
 		JS_FreeCString(context, cstring);
@@ -348,7 +348,7 @@ static PyObject *quickjs_to_python(RuntimeData *runtime_data, JSValue value) {
 		quickjs_exception_to_python(context);
 	} else if (tag == JS_TAG_FLOAT64) {
 		return_value = Py_BuildValue("d", JS_VALUE_GET_FLOAT64(value));
-	} else if (tag == JS_TAG_STRING || tag == JS_TAG_STRING_ROPE) {
+	} else if (JS_IsString(value)) {
 		const char *cstring = JS_ToCString(context, value);
 		return_value = Py_BuildValue("s", cstring);
 		JS_FreeCString(context, cstring);
