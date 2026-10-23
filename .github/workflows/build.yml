@@ -37,6 +37,7 @@ jobs:
       upstream_tag: ${{ steps.resolve.outputs.upstream_tag }}
       version: ${{ steps.resolve.outputs.version }}
       publish: ${{ steps.resolve.outputs.publish }}
+      build: ${{ steps.resolve.outputs.build }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -48,6 +49,7 @@ jobs:
         shell: bash
         env:
           EXPECTED_VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           # The commit is built exactly as checked out: pyproject.toml and the
           # submodule pointer are never rewritten in the runner.
@@ -74,10 +76,31 @@ jobs:
           echo "upstream_tag=$UPSTREAM_TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "publish=true" >> "$GITHUB_OUTPUT"
+
+          # A push to main whose version is already on PyPI is a no-op here:
+          # main.yml tests every push, so skip the wheel builds and publish.
+          BUILD=true
+          if [ "$EVENT_NAME" = "push" ]; then
+            STATUS=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/quickjs-ng/$VERSION/json")
+            case "$STATUS" in
+              200)
+                BUILD=false
+                TAG_SHA=$(git ls-remote origin "refs/tags/v$VERSION^{}" "refs/tags/v$VERSION" | awk 'NR==1{print $1}')
+                if [ -n "$TAG_SHA" ]; then
+                  echo "::notice::quickjs-ng $VERSION is already on PyPI (tag v$VERSION points at $TAG_SHA); skipping build, upload and tag"
+                else
+                  echo "::warning::quickjs-ng $VERSION is on PyPI but tag v$VERSION does not exist; skipping build, upload and tag"
+                fi ;;
+              404) ;;
+              *) echo "::error::Unexpected HTTP status $STATUS from PyPI"; exit 1 ;;
+            esac
+          fi
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
           echo "Building $SHA: version $VERSION, upstream $UPSTREAM_TAG"
 
   build-sdist:
     needs: setup
+    if: needs.setup.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -95,6 +118,7 @@ jobs:
 
   build-wheels:
     needs: setup
+    if: needs.setup.outputs.build == 'true'
     name: Build ${{ matrix.os }} ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -148,7 +172,7 @@ jobs:
 
   publish:
     needs: [setup, build-sdist, build-wheels]
-    if: needs.setup.outputs.publish == 'true'
+    if: needs.setup.outputs.publish == 'true' && needs.setup.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -234,10 +258,12 @@ jobs:
             git push origin "refs/tags/$TAG"
           fi
 
-      - name: Note missing tag for an already published version
+      - name: Note already published version
         if: steps.pypi.outputs.exists == 'true'
         run: |
           TAG="v$VERSION"
-          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::notice::Tag $TAG already points at $(git rev-parse "$TAG^{commit}"); not re-tagging"
+          else
             echo "::warning::$VERSION is on PyPI but tag $TAG does not exist; tag the released commit manually if needed"
           fi
