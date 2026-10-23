@@ -85,6 +85,7 @@ A comprehensive test file covering modern JavaScript features:
 | `RegExpFeatures` | Named groups, dotAll flag, lookbehind, Unicode property escapes |
 | `StringMethods` | padStart/End, trimStart/End, matchAll, unicode |
 | `ObjectMethods` | entries, fromEntries, values, Object.assign |
+| `StringAndBigIntRepresentations` | Rope strings (large concatenations) and short/heap BigInts converted to Python |
 
 ---
 
