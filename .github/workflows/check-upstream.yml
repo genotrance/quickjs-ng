@@ -103,7 +103,7 @@ jobs:
 
       - name: Trigger build at the committed SHA
         if: steps.check.outputs.needed == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           BUILD_SHA: ${{ steps.commit.outputs.sha }}
           BUILD_VERSION: ${{ steps.commit.outputs.version }}
