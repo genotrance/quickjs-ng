@@ -10,6 +10,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -114,7 +115,7 @@ before-build = "rm -rf {project}/build {project}/*.so {project}/_quickjs*"
 test-requires = ["pytest"]
 test-command = "pytest {project}/tests -q"
 # abi3 needs representative compatibility tests, not a redundant build per CPython.
-build = ["cp311-*", "cp315-*", "pp310-*", "pp311-*"]
+build = ["cp310-*", "cp315-*", "pp310-*", "pp311-*"]
 enable = ["pypy", "pypy-eol"]
 skip = ["cp*t-*"]
 

@@ -65,8 +65,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TITLE="Python support window drift: ${EXPECTED}"
+          vkey() { printf '%s\n' "$1" | tr ',' '\n' | sed '/^$/d' | sort -V; }
+          DROP=$(comm -23 <(vkey "$CURRENT" | sort) <(vkey "$EXPECTED" | sort) | sort -V | paste -sd, -)
+          ADD=$(comm -13 <(vkey "$CURRENT" | sort) <(vkey "$EXPECTED" | sort) | sort -V | paste -sd, -)
           if [ "$(gh issue list --state open --search "$TITLE in:title" --json number --jq 'length')" = 0 ]; then
             gh issue create \
               --title "$TITLE" \
-              --body "The monthly check found classifiers [$CURRENT], while devguide.python.org lists supported CPython versions [$EXPECTED]. Update classifiers, CI matrices, docs, and wheels as applicable."
+              --body "The monthly check found classifiers [$CURRENT], while devguide.python.org lists supported CPython versions [$EXPECTED]. Can be dropped (end of life): [${DROP:-none}]. To add: [${ADD:-none}]. Update classifiers, CI matrices, docs, and wheels as applicable."
           fi

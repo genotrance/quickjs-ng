@@ -104,21 +104,14 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  test-release:
-    needs: check
-    if: needs.check.outputs.release_needed == 'true'
-    uses: ./.github/workflows/main.yml
-    with:
-      sha: ${{ needs.check.outputs.sha }}
-
   trigger-build:
-    needs: [check, test-release]
+    needs: check
     if: needs.check.outputs.release_needed == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
-      - name: Trigger build at the tested SHA
+      - name: Trigger the gated build at the committed SHA
         uses: actions/github-script@v8
         env:
           BUILD_SHA: ${{ needs.check.outputs.sha }}

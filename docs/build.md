@@ -38,7 +38,7 @@ _use_stable_abi = _is_cpython and not _freethreaded
 
 | Runtime | `_use_stable_abi` | Reason |
 |---------|:-----------------:|---------|
-| CPython 3.11–3.15 | `True` | Standard case |
+| CPython 3.10–3.15 | `True` | Standard case |
 | CPython 3.13t / 3.14t / 3.15t (free-threaded) | `False` | `Py_LIMITED_API` incompatible with `Py_GIL_DISABLED` |
 | PyPy | `False` | PyPy has its own ABI; does not honour `Py_LIMITED_API` |
 
@@ -148,11 +148,18 @@ uv build   # sdist + wheel
 
 ## Wheel matrix
 
-cibuildwheel builds the oldest and newest supported CPython (3.11 and 3.15)
-and both shipped PyPy interpreters. For CPython,
+cibuildwheel builds the oldest and newest supported CPython (3.10 and 3.15)
+and both shipped PyPy interpreters. 3.10 is supported until its end of life on
+2026-10-31 and is the build interpreter of the `cp310-abi3` wheel, so the wheel
+is always imported and tested on 3.10. For CPython,
 `setup.py` sets `py_limited_api=_use_stable_abi=True`, so both CPython builds
-produce the same `cp310-abi3` tag; this tests the wheel at both ends of the ABI
-window without expanding the shipped artifact set. For PyPy,
+produce the same `cp310-abi3` tag. cibuildwheel (v4.3.3
+`find_compatible_wheel` in `cibuildwheel/util/packaging.py`) builds `cp310`
+first, then finds the previously built abi3 wheel with a tag ≤ the current
+interpreter and logs `Found previously built wheel ... Skipping build step`;
+it only runs the tests on 3.15. One abi3 wheel per platform is produced, so
+there is no duplicate-filename conflict, and the wheel is tested at both ends
+of the ABI window. For PyPy,
 `_use_stable_abi=False` and a PyPy-tagged wheel is produced per PyPy version.
 
 Free-threaded builds (`cp*t-*`) are excluded via `skip = ["cp*t-*"]` because

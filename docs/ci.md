@@ -9,8 +9,8 @@ Three workflows live under `.github/workflows/`:
 | File | Trigger | Purpose |
 |------|---------|---------|
 | `main.yml` | Push/PR, weekly schedule, dispatch, reusable call | Fast or complete regression coverage (pytest) |
-| `build.yml` | Push to `main`, `workflow_call`, `workflow_dispatch` | Build abi3 wheels + sdist of an exact commit, publish to PyPI, tag |
-| `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` | Detect a new upstream tag, commit to `main`, run full CI, then dispatch the wheel build |
+| `build.yml` | Push to `main`, `workflow_call`, `workflow_dispatch` | Run the full CI matrix on the exact commit, then build abi3 wheels + sdist, publish to PyPI, tag |
+| `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` | Detect a new upstream tag, commit to `main`, then dispatch the (self-gated) wheel build |
 | `python-support.yml` | Monthly cron (1st of month, 07:00 UTC), `workflow_dispatch` | Open an issue when the official CPython support window differs from package classifiers |
 
 ---
@@ -30,17 +30,34 @@ Pushes and pull requests run a deliberately small, representative matrix:
 
 | Runner | Interpreters | Why it runs on every change |
 |--------|--------------|-----------------------------|
-| Ubuntu | CPython 3.11, 3.15, 3.15t; PyPy 3.11 | Oldest/newest ABI, newest free-threaded runtime, and PyPy |
+| Ubuntu | CPython 3.10, 3.15, 3.15t; PyPy 3.11 | Oldest/newest ABI, newest free-threaded runtime, and PyPy |
 | Windows | CPython 3.15 | Windows compiler and path handling |
 | macOS | CPython 3.15 | macOS compiler and path handling |
 | `ubuntu-24.04-arm` | CPython 3.15 | Native Linux aarch64 path used for release wheels |
 
 The weekly Monday 05:00 UTC schedule, manual `workflow_dispatch`, and
-`workflow_call` use the complete matrix: CPython 3.11–3.15, free-threaded
-3.13t/3.14t/3.15t, and PyPy 3.10/3.11 on Ubuntu, Windows, and macOS, plus
-CPython 3.15 on native Linux aarch64. Scheduled workflow runs use the default
-branch (`devel`). `check-upstream.yml` calls this full matrix on the exact
-release commit before it can dispatch `build.yml`.
+a `workflow_call` with `full: true` use the complete matrix: CPython 3.10–3.15,
+free-threaded 3.13t/3.14t/3.15t, and PyPy 3.10/3.11 on Ubuntu, Windows, and
+macOS (11 interpreters x 3 OSes = 33 jobs), plus CPython 3.15 on native Linux
+aarch64 (34 test jobs). The fast matrix has 7 test jobs. Each run also has the
+`quality` and `select-matrix` jobs: fast = 9 jobs, full = 36 jobs.
+
+`workflow_call` takes an explicit boolean `full` input (default `false`). In a
+called workflow `github.event_name` is the caller's event, never
+`workflow_call`, so the selector honours `inputs.full` rather than the event
+name.
+
+### Release gate
+
+Every publish path runs through `build.yml`, whose `full-ci` job calls
+`main.yml` with `sha=<resolved SHA>` and `full: true` (`permissions: contents:
+read`). `build-sdist` and `build-wheels` need `full-ci`, and `publish` needs
+all of them, so nothing uploads unless the full matrix passed on the exact SHA
+being built. This covers a push to `main`, `workflow_dispatch`, `workflow_call`,
+and the dispatch from `check-upstream.yml` (which no longer runs a separate
+full matrix, so a release runs the matrix once). `full-ci` runs only when
+`setup` decides to build: a push to `main` whose version is already on PyPI
+skips `full-ci`, the builds, and the upload, leaving a cheap no-op.
 
 The package's supported CPython window is tracked by classifiers and
 `python-support.yml`. That workflow parses the official
@@ -48,12 +65,17 @@ The package's supported CPython window is tracked by classifiers and
 monthly and opens one issue if the supported bugfix/security versions drift.
 An operator updates the classifiers, CI table, wheel policy, and docs together.
 `requires-python >=3.10` remains to preserve the shipped PyPy 3.10 wheel;
-CPython support itself follows the classifier window.
+CPython support itself follows the classifier window. CPython 3.10 is
+restored until its end of life on 2026-10-31 (classifier, fast/full matrices,
+cibuildwheel `build`); after that date `python-support.yml` reports that 3.10
+can be dropped, and an operator removes it everywhere in one change.
 
 `pytest.mark.slow` is registered for intentionally expensive stress, timeout,
-or network tests. The tracemalloc leak test is marked because it takes repeated
-memory snapshots. Fast jobs run `-m "not slow"`; the full matrix and wheel
-tests have no marker filter and therefore include every test.
+or network tests. Fast jobs run `-m "not slow"`; the full matrix and wheel
+tests have no marker filter and therefore include every test. CI runs pytest
+with `--durations=15`. No test currently qualifies: the whole suite takes about
+1.73 s, so even `test_no_memory_leak` stays unmarked and runs on every PR. A
+test would qualify if it takes more than 5 s on CI or needs the network.
 
 The composite action `.github/actions/setup-python-env`:
 - Sets `allow-prereleases: true` on `actions/setup-python@v5` so that new
@@ -155,15 +177,16 @@ In `pyproject.toml`:
 before-build = "rm -rf {project}/build {project}/*.so {project}/_quickjs*"
 test-requires = ["pytest"]
 test-command = "pytest {project}/tests -q"
-build = ["cp311-*", "cp315-*", "pp310-*", "pp311-*"]
+build = ["cp310-*", "cp315-*", "pp310-*", "pp311-*"]
 enable = ["pypy", "pypy-eol"]
 skip = ["cp*t-*"]
 ```
 
-- **`build`** — exercises abi3 wheels on CPython 3.11 and 3.15 only. Both
-  builds carry the same `cp310-abi3` tag, so the artifact set remains one
-  CPython wheel per platform while retaining oldest/newest compatibility
-  coverage. It also builds and tests both shipped PyPy wheel versions.
+- **`build`** — exercises abi3 wheels on CPython 3.10 and 3.15 only. `cp310`
+  builds the `cp310-abi3` wheel; for `cp315` cibuildwheel reuses that
+  compatible abi3 wheel (skipping the build) and only tests it, so the
+  artifact set remains one CPython wheel per platform while retaining
+  oldest/newest compatibility coverage. It also builds and tests both shipped PyPy wheel versions.
 - **`enable = ["pypy", "pypy-eol"]`** — builds wheels for PyPy 3.11 (`pypy`)
   and PyPy 3.10 (`pypy-eol` — moved to end-of-life in cibuildwheel v3.2.0).
 - **`skip = ["cp*t-*"]`** — excludes free-threaded CPython builds (`cp313t`,
@@ -181,7 +204,7 @@ skip = ["cp*t-*"]
 
 | Aspect | CI (`main.yml`) | Build wheels (`build.yml`) |
 |--------|-----------------|----------------------------|
-| Trigger | Every push + PR | Push to `main`, `workflow_call`/`dispatch` |
+| Trigger | Every push + PR | Push to `main`, `workflow_call`/`dispatch` (after the full matrix on the same SHA) |
 | Speed | 7 test jobs on push/PR; complete matrix weekly/manual | 2–10 min (native aarch64; no QEMU) |
 | What it builds | C extension via `uv pip install -e .` | Binary abi3 wheels via `cibuildwheel` in Docker |
 | Test environment | Native host Python | Exact manylinux/musllinux/Windows wheel environment |
@@ -209,23 +232,21 @@ Runs monthly on the 1st at 06:00 UTC, and on `workflow_dispatch`.
    `uv.lock` to `X.Y.Z.1` (or keeps the version if `main` already has that
    upstream's bump), commits `Update upstream quickjs-ng to vX.Y.Z (version
    X.Y.Z.P)` and pushes it to `main`. No commit is made if nothing changed.
-6. Calls `main.yml` as a reusable workflow with the resulting `HEAD`; its full
-   matrix must pass before release artifacts are built.
-7. Dispatches `build.yml` on `main` with `sha` set to the tested `HEAD` and
-   `version` set to the new version.
+6. Dispatches `build.yml` on `main` with `sha` set to the committed `HEAD` and
+   `version` set to the new version. `build.yml` runs the full matrix on that
+   SHA (`full-ci`) before it builds or publishes; the matrix is not run twice.
 
 ```
 upstream version <= released base  →  no action
-upstream version > released base → commit bump to main, run full CI, dispatch build.yml at that SHA
+upstream version > released base → commit bump to main, dispatch build.yml at that SHA (which runs full CI first)
 ```
 
 Retries: if any step fails, re-run the workflow. An already committed bump is
 reused and `build.yml` skips PyPI upload for versions that are already published.
 
 The push uses `GITHUB_TOKEN`, which does not trigger other workflows, so the
-push does not start `build.yml` or `main.yml` by itself. The reusable full CI
-job explicitly tests the commit before the `actions: write` trigger job
-dispatches `build.yml`. If `main` has branch protection, the Actions bot must
+push does not start `build.yml` or `main.yml` by itself. The `actions: write`
+trigger job dispatches `build.yml`, whose own `full-ci` gate tests the commit. If `main` has branch protection, the Actions bot must
 be allowed to push to it.
 
 ### Required permissions
@@ -282,9 +303,26 @@ gh run watch --repo genotrance/quickjs-ng
 ```
 
 The scheduled full run needs no dispatch. During an upstream release,
-`check-upstream.yml` performs the same full reusable run automatically before
-it dispatches the publishing workflow; do not manually dispatch that workflow
-except as part of an approved release.
+`check-upstream.yml` dispatches `build.yml`, which runs the full matrix itself
+before publishing.
+
+### Expected runs for the 3.10 / release-gate change
+
+Timings come from the earlier green run (about 78–92 s setup plus 2–3 s pytest
+per test job; Windows and macOS runners are slower), so treat them as estimates.
+
+| Operator run | Jobs | Expected wall time |
+|--------------|------|--------------------|
+| `git push` to `devel` (CI) | 9: `quality`, `select-matrix`, 7 fast tests (Ubuntu 3.10/3.15/3.15t/PyPy 3.11, Windows 3.15, macOS 3.15, ARM 3.15) | 2–4 min |
+| `gh workflow run CI --repo genotrance/quickjs-ng --ref devel` | 36: `quality`, `select-matrix`, 34 full tests (33 + ARM 3.15); title `Test (full)` | 5–10 min |
+| `gh workflow run "Build wheels" --repo genotrance/quickjs-ng --ref devel -f sha=<devel sha>` | about 45: `setup`, `full-ci` (36 nested), `build-sdist`, 6 `build-wheels`, `publish` | 25–45 min (full CI 5–10 min, then wheels in parallel with native aarch64 at 10–20 min) |
+| `@dependabot rebase` on PR #18 | 9 (fast matrix, as for any PR) | 2–4 min |
+
+The 0.17.0.2 dispatch is safe: `publish` finds the version on PyPI, skips the
+upload and the tag, and the only effect is the gate plus a wheel build. A push
+to `main` with that version runs `setup` only (1 job, under a minute) and skips
+`full-ci`, builds, and publish. Confirm `full-ci` appears in the run and that
+the wheel jobs start only after it succeeds.
 
 ## Lock file enforcement
 
