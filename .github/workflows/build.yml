@@ -134,7 +134,7 @@ jobs:
             arch: i686
             cibw_archs: i686
             cibw_manylinux_image: manylinux_2_28
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             arch: aarch64
             cibw_archs: aarch64
             cibw_manylinux_image: manylinux_2_28
@@ -154,14 +154,8 @@ jobs:
           ref: ${{ needs.setup.outputs.sha }}
           submodules: recursive
 
-      - name: Set up QEMU
-        if: matrix.arch == 'aarch64'
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
-
       - name: Build wheels
-        uses: pypa/cibuildwheel@v4.3.2
+        uses: pypa/cibuildwheel@v4.3.3
         env:
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
           CIBW_MANYLINUX_I686_IMAGE: ${{ matrix.cibw_manylinux_image && format('quay.io/pypa/{0}_i686', matrix.cibw_manylinux_image) || '' }}

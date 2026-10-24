@@ -38,8 +38,8 @@ _use_stable_abi = _is_cpython and not _freethreaded
 
 | Runtime | `_use_stable_abi` | Reason |
 |---------|:-----------------:|---------|
-| CPython 3.10–3.14 | `True` | Standard case |
-| CPython 3.13t / 3.14t (free-threaded) | `False` | `Py_LIMITED_API` incompatible with `Py_GIL_DISABLED` |
+| CPython 3.11–3.15 | `True` | Standard case |
+| CPython 3.13t / 3.14t / 3.15t (free-threaded) | `False` | `Py_LIMITED_API` incompatible with `Py_GIL_DISABLED` |
 | PyPy | `False` | PyPy has its own ABI; does not honour `Py_LIMITED_API` |
 
 ### Compile flags
@@ -148,11 +148,12 @@ uv build   # sdist + wheel
 
 ## Wheel matrix
 
-cibuildwheel builds across all cp310+ interpreters and PyPy. For CPython,
-`setup.py` sets `py_limited_api=_use_stable_abi=True`, so each CPython build
-produces a `cp310-abi3` wheel that cibuildwheel then tests against cp311,
-cp312, cp313, cp314, etc. automatically. For PyPy, `_use_stable_abi=False` and
-a PyPy-tagged wheel is produced per PyPy version.
+cibuildwheel builds the oldest and newest supported CPython (3.11 and 3.15)
+and both shipped PyPy interpreters. For CPython,
+`setup.py` sets `py_limited_api=_use_stable_abi=True`, so both CPython builds
+produce the same `cp310-abi3` tag; this tests the wheel at both ends of the ABI
+window without expanding the shipped artifact set. For PyPy,
+`_use_stable_abi=False` and a PyPy-tagged wheel is produced per PyPy version.
 
 Free-threaded builds (`cp*t-*`) are excluded via `skip = ["cp*t-*"]` because
 `Py_LIMITED_API` is currently incompatible with `Py_GIL_DISABLED`
@@ -163,15 +164,18 @@ Free-threaded builds are still tested in `main.yml`.
 |----------|------|:--------------:|:-----------:|-------|
 | Linux (glibc) | x86_64 | 1 (abi3) | 2 (pypy310, pypy311) | |
 | Linux (glibc) | i686 | 1 (abi3) | 2 | manylinux_2_28 |
-| Linux (glibc) | aarch64 | 1 (abi3) | 2 | manylinux_2_28, QEMU |
+| Linux (glibc) | aarch64 | 1 (abi3) | 2 | manylinux_2_28, native `ubuntu-24.04-arm` |
 | Linux (musl) | x86_64 | 1 (abi3) | — | musllinux; PyPy has no musl builds |
+| Linux (musl) | i686 | 1 (abi3) | — | musllinux; PyPy has no musl builds |
+| Linux (musl) | aarch64 | 1 (abi3) | — | musllinux; PyPy has no musl builds |
 | Windows | AMD64 | 1 (abi3) | 2 | MSVC |
 | Windows | x86 | 1 (abi3) | 2 | MSVC |
 | macOS | arm64 | 1 (abi3) | 2 | Apple Silicon |
 
-**Total: 19 wheels** — 7 CPython abi3 wheels (one per platform/arch, each
-covers Python 3.10+) plus 12 PyPy wheels (pypy3.10 and pypy3.11 per
-platform/arch, manylinux only — PyPy has no musllinux support).
+**Total: 19 wheels** — 9 CPython abi3 wheels (one per platform/arch, each
+covers Python 3.10+) plus 10 PyPy wheels (pypy3.10 and pypy3.11 for Linux
+manylinux, Windows AMD64, and macOS arm64; PyPy has no musllinux or Windows
+x86 support).
 
 ## Dependency lock
 

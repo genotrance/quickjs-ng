@@ -19,7 +19,7 @@ can break reference cycles between `Context` and `Object` instances.
 
 By targeting the CPython **stable ABI** (`Py_LIMITED_API = 0x030A0000`), wheels
 are forward-compatible with all Python ≥ 3.10. Free-threaded builds (cp313t,
-cp314t) require separate wheels but benefit from the same stable API surface.
+cp314t, cp315t) require separate wheels but benefit from the same stable API surface.
 
 ### What changes at the C level
 

@@ -8,9 +8,10 @@ Three workflows live under `.github/workflows/`:
 
 | File | Trigger | Purpose |
 |------|---------|---------|
-| `main.yml` | Push + PR to `main`/`devel` | Fast regression feedback (pytest) |
+| `main.yml` | Push/PR, weekly schedule, dispatch, reusable call | Fast or complete regression coverage (pytest) |
 | `build.yml` | Push to `main`, `workflow_call`, `workflow_dispatch` | Build abi3 wheels + sdist of an exact commit, publish to PyPI, tag |
-| `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` | Detect new quickjs-ng upstream tags, commit the update to `main`, dispatch `build.yml` at that commit |
+| `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` | Detect a new upstream tag, commit to `main`, run full CI, then dispatch the wheel build |
+| `python-support.yml` | Monthly cron (1st of month, 07:00 UTC), `workflow_dispatch` | Open an issue when the official CPython support window differs from package classifiers |
 
 ---
 
@@ -25,20 +26,52 @@ release.
 
 ## CI (`main.yml`)
 
-Runs `pytest` across Python 3.10–3.14 and PyPy 3.10/3.11 on Ubuntu, Windows,
-and macOS.
+Pushes and pull requests run a deliberately small, representative matrix:
+
+| Runner | Interpreters | Why it runs on every change |
+|--------|--------------|-----------------------------|
+| Ubuntu | CPython 3.11, 3.15, 3.15t; PyPy 3.11 | Oldest/newest ABI, newest free-threaded runtime, and PyPy |
+| Windows | CPython 3.15 | Windows compiler and path handling |
+| macOS | CPython 3.15 | macOS compiler and path handling |
+| `ubuntu-24.04-arm` | CPython 3.15 | Native Linux aarch64 path used for release wheels |
+
+The weekly Monday 05:00 UTC schedule, manual `workflow_dispatch`, and
+`workflow_call` use the complete matrix: CPython 3.11–3.15, free-threaded
+3.13t/3.14t/3.15t, and PyPy 3.10/3.11 on Ubuntu, Windows, and macOS, plus
+CPython 3.15 on native Linux aarch64. Scheduled workflow runs use the default
+branch (`devel`). `check-upstream.yml` calls this full matrix on the exact
+release commit before it can dispatch `build.yml`.
+
+The package's supported CPython window is tracked by classifiers and
+`python-support.yml`. That workflow parses the official
+[`devguide.python.org/versions`](https://devguide.python.org/versions/) table
+monthly and opens one issue if the supported bugfix/security versions drift.
+An operator updates the classifiers, CI table, wheel policy, and docs together.
+`requires-python >=3.10` remains to preserve the shipped PyPy 3.10 wheel;
+CPython support itself follows the classifier window.
+
+`pytest.mark.slow` is registered for intentionally expensive stress, timeout,
+or network tests. The tracemalloc leak test is marked because it takes repeated
+memory snapshots. Fast jobs run `-m "not slow"`; the full matrix and wheel
+tests have no marker filter and therefore include every test.
 
 The composite action `.github/actions/setup-python-env`:
-- Sets `allow-prereleases: true` on `actions/setup-python@v5` so that Python
-  3.14 (pre-release) and PyPy can be installed.
+- Sets `allow-prereleases: true` on `actions/setup-python@v5` so that new
+  CPython releases and PyPy can be installed as they enter the support window.
 - Runs `uv pip install setuptools` before `uv pip install -e .` because PyPy
   venvs created by `uv sync` do not include `setuptools` by default, which is
   required to build the C extension.
 
-**Why CI is fast (~2 min):**
+**Why ordinary CI is fast:**
 CI builds the C extension in-place via `uv pip install -e .` using the host
 Python. There is no Docker, no QEMU, no wheel packaging — just compile and run
-pytest directly. This gives fast feedback on every push.
+pytest directly. The green baseline run `40064370056` spent 6m06s wall time on
+25 jobs (24 test jobs consumed 1,978 runner-seconds; setup was 78–92 seconds
+per job while pytest itself took 2–3 seconds). The push/PR policy now launches
+seven test jobs rather than 24, a 71% reduction in test job setup work; the
+weekly/full path preserves the complete coverage. The prior QEMU aarch64 wheel
+job took 35–50 minutes; native `ubuntu-24.04-arm` avoids emulation, with an
+expected 4–6 minute build. The first release run records the hosted timing.
 
 **PyPy notes:**
 - `test_memory.py` is automatically skipped on PyPy (`tracemalloc` is
@@ -59,9 +92,10 @@ pytest directly. This gives fast feedback on every push.
 | `workflow_call` | `sha` input (default: triggering commit) | `sha`, `version` (both optional) |
 | `workflow_dispatch` | `sha` input (default: head of the selected ref) | `sha`, `version` (both optional) |
 
-`check-upstream.yml` dispatches `build.yml` with the SHA and version of the
-commit it just pushed. The commit is built as is: `pyproject.toml` and the
-submodule pointer are not modified in the runner.
+`check-upstream.yml` first runs the complete reusable `main.yml` matrix for the
+SHA and version of the commit it just pushed, then dispatches `build.yml`. The
+commit is built as is: `pyproject.toml` and the submodule pointer are not
+modified in the runner.
 
 ### Jobs
 
@@ -74,8 +108,9 @@ Outputs: `sha`, `upstream_tag`, `version`, `publish`.
 **`build-sdist`** — Builds a source distribution with `pipx run build --sdist`.
 
 **`build-wheels`** — Matrix of 6 platform/arch combinations, each running
-`cibuildwheel@v2.23` with `CIBW_BUILD: "cp310-*"`. Produces one `cp310-abi3`
-wheel per platform.
+`cibuildwheel@v4.3.3`. It builds and tests one `cp310-abi3` wheel on both the
+oldest and newest supported CPython, and builds/tests the two shipped PyPy
+wheels. The duplicate abi3 compatibility test does not add a shipped wheel.
 
 **`publish`** — Downloads all artifacts and, in order:
 1. Fails if the version differs from `pyproject.toml` at the commit (or from
@@ -100,7 +135,7 @@ Re-running the workflow for the same commit is safe.
 |--------|------|--------------|-------|
 | `ubuntu-latest` | x86_64 | `x86_64` | manylinux + musllinux |
 | `ubuntu-latest` | i686 | `i686` | `manylinux_2_28` image (GCC ≥ 8 for C99) |
-| `ubuntu-latest` | aarch64 | `aarch64` | `manylinux_2_28`; QEMU via `docker/setup-qemu-action` |
+| `ubuntu-24.04-arm` | aarch64 | `aarch64` | `manylinux_2_28`; native ARM runner |
 | `windows-latest` | x86_64 | `AMD64` | MSVC with `/std:c11` |
 | `windows-latest` | i686 | `x86` | MSVC with `/std:c11` |
 | `macos-14` | arm64 | `arm64` | Apple Silicon runner |
@@ -120,16 +155,19 @@ In `pyproject.toml`:
 before-build = "rm -rf {project}/build {project}/*.so {project}/_quickjs*"
 test-requires = ["pytest"]
 test-command = "pytest {project}/tests -q"
+build = ["cp311-*", "cp315-*", "pp310-*", "pp311-*"]
 enable = ["pypy", "pypy-eol"]
 skip = ["cp*t-*"]
 ```
 
+- **`build`** — exercises abi3 wheels on CPython 3.11 and 3.15 only. Both
+  builds carry the same `cp310-abi3` tag, so the artifact set remains one
+  CPython wheel per platform while retaining oldest/newest compatibility
+  coverage. It also builds and tests both shipped PyPy wheel versions.
 - **`enable = ["pypy", "pypy-eol"]`** — builds wheels for PyPy 3.11 (`pypy`)
   and PyPy 3.10 (`pypy-eol` — moved to end-of-life in cibuildwheel v3.2.0).
-  CPython 3.14 is now stable and built by default without any enable flag
-  (as of cibuildwheel v3.2.1).
 - **`skip = ["cp*t-*"]`** — excludes free-threaded CPython builds (`cp313t`,
-  `cp314t`) because `Py_LIMITED_API` is currently incompatible with
+  `cp314t`, `cp315t`) because `Py_LIMITED_API` is currently incompatible with
   `Py_GIL_DISABLED` (see [CPython issue #111506](https://github.com/python/cpython/issues/111506)).
   Free-threaded builds still work; they are tested in `main.yml` via `uv`.
 - The **`before-build` hook** removes stale `.so` files that would otherwise be
@@ -144,7 +182,7 @@ skip = ["cp*t-*"]
 | Aspect | CI (`main.yml`) | Build wheels (`build.yml`) |
 |--------|-----------------|----------------------------|
 | Trigger | Every push + PR | Push to `main`, `workflow_call`/`dispatch` |
-| Speed | ~2 min per job | 2–60 min (aarch64 via QEMU) |
+| Speed | 7 test jobs on push/PR; complete matrix weekly/manual | 2–10 min (native aarch64; no QEMU) |
 | What it builds | C extension via `uv pip install -e .` | Binary abi3 wheels via `cibuildwheel` in Docker |
 | Test environment | Native host Python | Exact manylinux/musllinux/Windows wheel environment |
 | Purpose | Fast regression feedback | Validates exact published artifact; handles PyPI publishing |
@@ -171,23 +209,24 @@ Runs monthly on the 1st at 06:00 UTC, and on `workflow_dispatch`.
    `uv.lock` to `X.Y.Z.1` (or keeps the version if `main` already has that
    upstream's bump), commits `Update upstream quickjs-ng to vX.Y.Z (version
    X.Y.Z.P)` and pushes it to `main`. No commit is made if nothing changed.
-6. Dispatches `build.yml` on `main` with `sha` set to the resulting `HEAD` and
+6. Calls `main.yml` as a reusable workflow with the resulting `HEAD`; its full
+   matrix must pass before release artifacts are built.
+7. Dispatches `build.yml` on `main` with `sha` set to the tested `HEAD` and
    `version` set to the new version.
 
 ```
 upstream version <= released base  →  no action
-upstream version >  released base  →  commit bump to main, dispatch build.yml at that SHA
+upstream version > released base → commit bump to main, run full CI, dispatch build.yml at that SHA
 ```
 
 Retries: if any step fails, re-run the workflow. An already committed bump is
 reused and `build.yml` skips PyPI upload for versions that are already published.
 
 The push uses `GITHUB_TOKEN`, which does not trigger other workflows, so the
-push does not start `build.yml` or `main.yml` by itself; the explicit dispatch
-(which is allowed for `GITHUB_TOKEN`) starts the build. `main.yml` therefore
-does not run for the bump commit; the wheel builds run the test suite through
-cibuildwheel. If `main` has branch protection, the Actions bot must be allowed
-to push to it.
+push does not start `build.yml` or `main.yml` by itself. The reusable full CI
+job explicitly tests the commit before the `actions: write` trigger job
+dispatches `build.yml`. If `main` has branch protection, the Actions bot must
+be allowed to push to it.
 
 ### Required permissions
 
@@ -195,8 +234,10 @@ to push to it.
 jobs:
   check:
     permissions:
-      actions: write    # required to call createWorkflowDispatch
       contents: write   # required to push the bump commit to main
+  trigger-build:
+    permissions:
+      actions: write    # required to call createWorkflowDispatch
 ```
 
 The `GITHUB_TOKEN` for scheduled workflows defaults to read-only. Without
@@ -209,7 +250,7 @@ The bump is committed to `main` and the dispatch targets `ref: 'main'` — the
 stable branch that triggers publishing. The workflow always checks out `main`,
 whichever branch the workflow run itself was started from.
 
-### Testing the workflow manually
+### Operator-approved release dispatch
 
 ```bash
 gh workflow run "Check upstream quickjs-ng" --repo genotrance/quickjs-ng --ref devel
@@ -220,6 +261,30 @@ Then watch:
 ```bash
 gh run watch --repo genotrance/quickjs-ng
 ```
+
+## Operator verification
+
+After this change lands on `devel`, confirm the automatic push/PR run has seven
+test jobs plus quality and matrix selection:
+
+```bash
+gh run list --repo genotrance/quickjs-ng --workflow main.yml --branch devel --limit 1
+gh run watch --repo genotrance/quickjs-ng
+```
+
+Run the full pre-release dry run explicitly before release review (it tests the
+selected `devel` commit without publishing):
+
+```bash
+gh workflow run CI --repo genotrance/quickjs-ng --ref devel
+gh run list --repo genotrance/quickjs-ng --workflow main.yml --branch devel --limit 1
+gh run watch --repo genotrance/quickjs-ng
+```
+
+The scheduled full run needs no dispatch. During an upstream release,
+`check-upstream.yml` performs the same full reusable run automatically before
+it dispatches the publishing workflow; do not manually dispatch that workflow
+except as part of an approved release.
 
 ## Lock file enforcement
 

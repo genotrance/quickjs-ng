@@ -14,8 +14,11 @@ jobs:
   check:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+      version: ${{ steps.commit.outputs.version }}
+      release_needed: ${{ steps.check.outputs.needed }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -101,12 +104,25 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Trigger build at the committed SHA
-        if: steps.check.outputs.needed == 'true'
+  test-release:
+    needs: check
+    if: needs.check.outputs.release_needed == 'true'
+    uses: ./.github/workflows/main.yml
+    with:
+      sha: ${{ needs.check.outputs.sha }}
+
+  trigger-build:
+    needs: [check, test-release]
+    if: needs.check.outputs.release_needed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Trigger build at the tested SHA
         uses: actions/github-script@v8
         env:
-          BUILD_SHA: ${{ steps.commit.outputs.sha }}
-          BUILD_VERSION: ${{ steps.commit.outputs.version }}
+          BUILD_SHA: ${{ needs.check.outputs.sha }}
+          BUILD_VERSION: ${{ needs.check.outputs.version }}
         with:
           script: |
             await github.rest.actions.createWorkflowDispatch({
