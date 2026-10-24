@@ -82,7 +82,7 @@ class LazyExecutor(unittest.TestCase):
             + snippet
             + "\nprint(sum('quickjs-worker' in t.name for t in threading.enumerate()))\n"
         )
-        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)  # noqa: S603
         self.assertEqual(out.returncode, 0, out.stderr)
         return int(out.stdout.strip().splitlines()[-1])
 
@@ -90,9 +90,7 @@ class LazyExecutor(unittest.TestCase):
         self.assertEqual(self._worker_thread_count("quickjs.Context().eval('1 + 1')"), 0)
 
     def test_function_creates_worker(self):
-        self.assertGreaterEqual(
-            self._worker_thread_count("quickjs.Function('f', 'function f(){ return 1; }')"), 1
-        )
+        self.assertGreaterEqual(self._worker_thread_count("quickjs.Function('f', 'function f(){ return 1; }')"), 1)
 
 
 class ContextPerThread(unittest.TestCase):
@@ -284,7 +282,7 @@ class ExecutorCreationRaces(unittest.TestCase):
             "assert len({id(f._threadpool) for f in fs}) == 1\n"
             "assert quickjs._executor_count == 1, quickjs._executor_count\n"
         )
-        subprocess.run([sys.executable, "-c", code], check=True)
+        subprocess.run([sys.executable, "-c", code], check=True)  # noqa: S603
 
     def test_concurrent_shared_and_own_keep_stack_size(self):
         code = (
@@ -300,7 +298,7 @@ class ExecutorCreationRaces(unittest.TestCase):
             "assert all(len(f._threadpool._threads) == 1 for f in fs)\n"
             "assert all(f() == 1 for f in fs)\n"
         )
-        subprocess.run([sys.executable, "-c", code], check=True)
+        subprocess.run([sys.executable, "-c", code], check=True)  # noqa: S603
 
     def test_no_worker_after_import_or_context(self):
         code = (
@@ -308,4 +306,4 @@ class ExecutorCreationRaces(unittest.TestCase):
             "quickjs.Context().eval('1+1')\n"
             "assert threading.active_count() == 1, threading.enumerate()\n"
         )
-        subprocess.run([sys.executable, "-c", code], check=True)
+        subprocess.run([sys.executable, "-c", code], check=True)  # noqa: S603
