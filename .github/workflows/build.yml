@@ -100,8 +100,18 @@ jobs:
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
           echo "Building $SHA: version $VERSION, upstream $UPSTREAM_TAG"
 
-  build-sdist:
+  full-ci:
     needs: setup
+    if: needs.setup.outputs.build == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/main.yml
+    with:
+      sha: ${{ needs.setup.outputs.sha }}
+      full: true
+
+  build-sdist:
+    needs: [setup, full-ci]
     if: needs.setup.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -119,7 +129,7 @@ jobs:
           path: dist/*.tar.gz
 
   build-wheels:
-    needs: setup
+    needs: [setup, full-ci]
     if: needs.setup.outputs.build == 'true'
     name: Build ${{ matrix.os }} ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
@@ -167,7 +177,7 @@ jobs:
           path: wheelhouse/*.whl
 
   publish:
-    needs: [setup, build-sdist, build-wheels]
+    needs: [setup, full-ci, build-sdist, build-wheels]
     if: needs.setup.outputs.publish == 'true' && needs.setup.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:

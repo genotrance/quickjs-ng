@@ -21,11 +21,15 @@ split into six logical files:
 ## CI test selection
 
 `slow` is a registered pytest marker for tests that deliberately use expensive
-stress, timeout, or network behavior. `test_no_memory_leak` uses repeated
-`tracemalloc` snapshots and carries this marker. Push/PR CI runs
-`pytest -m "not slow"`; full scheduled, manual, release, and wheel runs use no
-marker filter and include it. Add the marker only when a test is intentionally
-expensive, not merely because it is intermittently slow.
+stress, timeout, or network behavior. Push/PR CI runs `pytest -m "not slow"`;
+full scheduled, manual, release, and wheel runs use no marker filter and include
+every test. CI passes `--durations=15` so the GitHub logs record per-test time.
+
+**No test currently qualifies.** The whole suite takes about 1.73 s, and
+`test_no_memory_leak` (the only `tracemalloc` leak coverage) is a fast test that
+must run on every PR, so it is not marked. A test qualifies for `slow` only when
+it takes more than 5 s on CI or needs the network; check the `--durations=15`
+output in the CI logs before adding the marker.
 
 ---
 

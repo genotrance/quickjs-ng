@@ -69,7 +69,6 @@ _filters = [
 ]
 
 
-@pytest.mark.slow
 def test_no_memory_leak():
     """Exercise quickjs APIs twice and verify no memory is leaked."""
     # Warm up (to discount regex cache etc.)

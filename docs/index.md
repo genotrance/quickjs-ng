@@ -21,6 +21,6 @@ for the `quickjs-ng` Python package — a thin wrapper around the
 
 - **PyPI name**: `quickjs-ng`
 - **Import**: `import quickjs`
-- **Requires**: CPython 3.11+ or PyPy 3.10/3.11
+- **Requires**: CPython 3.10+ (until its EOL on 2026-10-31) or PyPy 3.10/3.11
 - **Wheel tag**: `cp310-abi3` (one wheel per platform, covers Python 3.10+)
 - **Engine**: [quickjs-ng](https://github.com/quickjs-ng/quickjs) (community fork of QuickJS)
