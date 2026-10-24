@@ -7,6 +7,23 @@ on:
       - devel
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    # Full support matrix, from the default (devel) branch.
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA to test (defaults to the selected ref)"
+        required: false
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      sha:
+        description: "Commit SHA to test (defaults to the calling commit)"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   quality:
@@ -15,6 +32,7 @@ jobs:
       - name: Check out
         uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.sha || github.sha }}
           submodules: recursive
 
       - uses: actions/cache@v6
@@ -28,12 +46,59 @@ jobs:
       - name: Run checks
         run: make check
 
+  select-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+      mode: ${{ steps.select.outputs.mode }}
+    steps:
+      - id: select
+        name: Select fast or full coverage
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = schedule ] || [ "$EVENT_NAME" = workflow_dispatch ] || [ "$EVENT_NAME" = workflow_call ]; then
+            MODE=full python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import itertools
+          import json
+          import os
+
+          rows = []
+          for os_name, python_version in itertools.product(
+              ("ubuntu-latest", "windows-latest", "macos-latest"),
+              ("3.11", "3.12", "3.13", "3.14", "3.15", "3.13t", "3.14t", "3.15t", "pypy3.10", "pypy3.11"),
+          ):
+              rows.append({"os": os_name, "python-version": python_version, "pytest-args": ""})
+          # Native ARM exercises the Linux-aarch64 path which the wheel workflow ships.
+          rows.append({"os": "ubuntu-24.04-arm", "python-version": "3.15", "pytest-args": ""})
+          print("matrix=" + json.dumps({"include": rows}, separators=(",", ":")))
+          print("mode=" + os.environ["MODE"])
+          PY
+          else
+            MODE=fast python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          rows = [
+              {"os": "ubuntu-latest", "python-version": "3.11", "pytest-args": "-m 'not slow'"},
+              {"os": "ubuntu-latest", "python-version": "3.15", "pytest-args": "-m 'not slow'"},
+              {"os": "ubuntu-latest", "python-version": "3.15t", "pytest-args": "-m 'not slow'"},
+              {"os": "ubuntu-latest", "python-version": "pypy3.11", "pytest-args": "-m 'not slow'"},
+              {"os": "windows-latest", "python-version": "3.15", "pytest-args": "-m 'not slow'"},
+              {"os": "macos-latest", "python-version": "3.15", "pytest-args": "-m 'not slow'"},
+              {"os": "ubuntu-24.04-arm", "python-version": "3.15", "pytest-args": "-m 'not slow'"},
+          ]
+          print("matrix=" + json.dumps({"include": rows}, separators=(",", ":")))
+          print("mode=" + os.environ["MODE"])
+          PY
+          fi
+
   tests:
+    needs: select-matrix
+    name: Test (${{ needs.select-matrix.outputs.mode }}) ${{ matrix.os }} / ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
     strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.13t", "3.14", "pypy3.10", "pypy3.11"]
+      matrix: ${{ fromJSON(needs.select-matrix.outputs.matrix) }}
       fail-fast: false
     defaults:
       run:
@@ -42,6 +107,7 @@ jobs:
       - name: Check out
         uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.sha || github.sha }}
           submodules: recursive
 
       - name: Set up the environment
@@ -50,4 +116,4 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Run tests
-        run: uv run --locked python -m pytest tests --cov --cov-config=pyproject.toml --cov-report=xml
+        run: uv run --locked python -m pytest tests ${{ matrix.pytest-args }} --cov --cov-config=pyproject.toml --cov-report=xml

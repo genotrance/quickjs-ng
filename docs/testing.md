@@ -18,6 +18,17 @@ split into six logical files:
 
 ---
 
+## CI test selection
+
+`slow` is a registered pytest marker for tests that deliberately use expensive
+stress, timeout, or network behavior. `test_no_memory_leak` uses repeated
+`tracemalloc` snapshots and carries this marker. Push/PR CI runs
+`pytest -m "not slow"`; full scheduled, manual, release, and wheel runs use no
+marker filter and include it. Add the marker only when a test is intentionally
+expensive, not merely because it is intermittently slow.
+
+---
+
 ## Adapted Tests
 
 Three categories of changes were needed when porting tests from the original

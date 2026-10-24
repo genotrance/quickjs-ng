@@ -13,7 +13,7 @@ Drop-in replacement for the archived [quickjs](https://github.com/PetterS/quickj
 pip install quickjs-ng
 ```
 
-Requires Python ≥ 3.10. Pre-built wheels are available for Linux (x86_64, i686, aarch64), Windows (AMD64, x86), and macOS (arm64), for CPython 3.10+ and PyPy 3.10/3.11.
+Requires CPython 3.11+ or PyPy 3.10/3.11. Pre-built wheels are available for Linux (x86_64, i686, aarch64), Windows (AMD64, x86), and macOS (arm64).
 
 ## Usage
 
@@ -75,7 +75,7 @@ Each `Context` owns an isolated QuickJS runtime — there is no shared state bet
 | `Function` helper | ✅ | Small (executor dispatch) |
 | Shared `Context` | ❌ | — |
 
-**Free-threaded Python (3.13t / 3.14t):** Both patterns remain safe. The GIL was never relied upon for thread-safety.
+**Free-threaded Python (3.13t / 3.14t / 3.15t):** Both patterns remain safe. The GIL was never relied upon for thread-safety.
 
 **musl / Alpine:** Worker threads are automatically created with an 8 MB stack (matching glibc defaults) so `set_max_stack_size` and deep recursion work correctly on musl-based systems.
 
@@ -111,7 +111,7 @@ Bug reports and pull requests are welcome at <https://github.com/genotrance/quic
 2. Run `make install` to set up the venv, build the C extension, and install pre-commit hooks.
 3. Create a feature branch from `devel`, make changes, add tests in `tests/`.
 4. Run `make check && make test` — all checks must pass.
-5. Open a pull request to `devel`. CI runs on Ubuntu, Windows, and macOS across Python 3.10–3.14 (including free-threaded 3.13t/3.14t) and PyPy 3.10/3.11.
+5. Open a pull request to `devel`. Fast CI covers representative oldest/newest CPython, free-threaded, PyPy, Windows, macOS, and native Linux ARM paths; weekly and manual runs cover CPython 3.11–3.15 (including 3.13t/3.14t/3.15t) and PyPy 3.10/3.11 across all three desktop OSes.
 
 Dependabot updates and fixes also target `devel`. For a release, bump the
 wrapper version there and merge `devel` into `main`; after the automatic

@@ -1,0 +1,72 @@
+name: Check Python support window
+
+on:
+  schedule:
+    # Check the official support window monthly from the default (devel) branch.
+    - cron: "0 7 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare classifiers with the official support window
+        id: support
+        run: |
+          python3 - <<'PY'
+          import html
+          import os
+          import re
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          project = Path("pyproject.toml").read_text()
+          current = set(re.findall(r"Programming Language :: Python :: (3\.\d+)", project))
+
+          request = Request(
+              "https://devguide.python.org/versions/",
+              headers={"User-Agent": "quickjs-ng-python-support-check"},
+          )
+          with urlopen(request, timeout=20) as response:
+              page = response.read().decode()
+
+          expected = set()
+          for row in re.findall(r"<tr.*?</tr>", page, flags=re.DOTALL):
+              cells = [
+                  html.unescape(re.sub(r"<[^>]+>", "", cell)).strip().lower()
+                  for cell in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.DOTALL)
+              ]
+              if cells and re.fullmatch(r"3\.\d+", cells[0]) and any(
+                  status in {"bugfix", "security"} for status in cells[1:]
+              ):
+                  expected.add(cells[0])
+
+          if not expected:
+              raise SystemExit("Could not parse supported CPython versions from devguide.python.org")
+
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a") as file:
+              file.write(f"current={','.join(sorted(current, key=lambda v: tuple(map(int, v.split('.')))))}\n")
+              file.write(f"expected={','.join(sorted(expected, key=lambda v: tuple(map(int, v.split('.')))))}\n")
+              file.write(f"drift={'true' if current != expected else 'false'}\n")
+          PY
+
+      - name: Open a support-drift issue
+        if: steps.support.outputs.drift == 'true'
+        env:
+          CURRENT: ${{ steps.support.outputs.current }}
+          EXPECTED: ${{ steps.support.outputs.expected }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="Python support window drift: ${EXPECTED}"
+          if [ "$(gh issue list --state open --search "$TITLE in:title" --json number --jq 'length')" = 0 ]; then
+            gh issue create \
+              --title "$TITLE" \
+              --body "The monthly check found classifiers [$CURRENT], while devguide.python.org lists supported CPython versions [$EXPECTED]. Update classifiers, CI matrices, docs, and wheels as applicable."
+          fi

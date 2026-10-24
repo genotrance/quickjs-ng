@@ -33,7 +33,7 @@ Adding a C-level mutex to `Context` was considered and rejected:
 
 ---
 
-## Free-Threaded Python (3.13t / 3.14t)
+## Free-Threaded Python (3.13t / 3.14t / 3.15t)
 
 When the GIL is disabled the same threading rules apply. The two safe patterns
 (`Function` helper and context-per-thread) remain correct because they already
