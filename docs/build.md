@@ -178,7 +178,7 @@ Free-threaded builds are still tested in `main.yml`.
 | Linux (musl) | i686 | 1 (abi3) | — | musllinux; PyPy has no musl builds |
 | Linux (musl) | aarch64 | 1 (abi3) | — | musllinux; PyPy has no musl builds |
 | Windows | AMD64 | 1 (abi3) | 2 | MSVC |
-| Windows | x86 | 1 (abi3) | 2 | MSVC |
+| Windows | x86 | 1 (abi3) | — | MSVC; PyPy has no Windows x86 support |
 | macOS | arm64 | 1 (abi3) | 2 | Apple Silicon |
 
 **Total: 19 wheels** — 9 CPython abi3 wheels (one per platform/arch, each
