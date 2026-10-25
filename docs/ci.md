@@ -35,8 +35,12 @@ Pushes and pull requests run a deliberately small, representative matrix:
 | macOS | CPython 3.15 | macOS compiler and path handling |
 | `ubuntu-24.04-arm` | CPython 3.15 | Native Linux aarch64 path used for release wheels |
 
-The weekly Monday 05:00 UTC schedule, manual `workflow_dispatch`, and
-a `workflow_call` with `full: true` use the complete matrix: CPython 3.10–3.15,
+See [testing.md](testing.md#why-the-matrix-is-split) for why the matrix is
+this small on every push.
+
+The weekly Monday 05:00 UTC schedule (`schedule` triggers only run from the
+repository's default branch, `devel`), manual `workflow_dispatch`, and a
+`workflow_call` with `full: true` use the complete matrix: CPython 3.10–3.15,
 free-threaded 3.13t/3.14t/3.15t, and PyPy 3.10/3.11 on Ubuntu, Windows, and
 macOS (11 interpreters x 3 OSes = 33 jobs), plus CPython 3.15 on native Linux
 aarch64 (34 test jobs). The fast matrix has 7 test jobs. Each run also has the
@@ -49,15 +53,29 @@ name.
 
 ### Release gate
 
-Every publish path runs through `build.yml`, whose `full-ci` job calls
-`main.yml` with `sha=<resolved SHA>` and `full: true` (`permissions: contents:
-read`). `build-sdist` and `build-wheels` need `full-ci`, and `publish` needs
-all of them, so nothing uploads unless the full matrix passed on the exact SHA
-being built. This covers a push to `main`, `workflow_dispatch`, `workflow_call`,
-and the dispatch from `check-upstream.yml` (which no longer runs a separate
-full matrix, so a release runs the matrix once). `full-ci` runs only when
-`setup` decides to build: a push to `main` whose version is already on PyPI
-skips `full-ci`, the builds, and the upload, leaving a cheap no-op.
+Three paths can publish to PyPI, and all three run through `build.yml`: a push
+to `main` carrying a new version, a manual `workflow_dispatch` of `build.yml`,
+and `check-upstream.yml`'s dispatch of `build.yml` after it commits a version
+bump to `main`. `build.yml`'s `full-ci` job calls `main.yml` with
+`sha=<resolved SHA>` and `full: true` (`permissions: contents: read`).
+`build-sdist` and `build-wheels` need `full-ci`, and `publish` needs all of
+them, so for every one of the three paths nothing uploads unless the full
+matrix passed on the exact SHA being built — there is no code path in
+`build.yml` that reaches `publish` without `full-ci` having succeeded first.
+`full-ci` runs only when `setup` decides to build: a push to `main` whose
+version is already on PyPI skips `full-ci`, the builds, and the upload,
+leaving a cheap no-op.
+
+What is *not* enforced by any workflow is the pre-merge check: nothing in this
+repository requires a green full-matrix run on `devel` before merging it into
+`main` (push/PR CI on `devel` only runs the fast matrix, and there is no
+branch-protection configuration in this repo to check). Dispatching `main.yml`
+with `full: true` against `devel` before merging — see
+[Operator verification](#operator-verification) below — is an operator
+procedure, not a gate. Skipping it cannot let a broken build publish, because
+`build.yml`'s own `full-ci` job still runs automatically on the resulting
+`main` commit before anything uploads; skipping it only means a break surfaces
+on `main` instead of being caught on `devel` first.
 
 The package's supported CPython window is tracked by classifiers and
 `python-support.yml`. That workflow parses the official
@@ -70,12 +88,11 @@ restored until its end of life on 2026-10-31 (classifier, fast/full matrices,
 cibuildwheel `build`); after that date `python-support.yml` reports that 3.10
 can be dropped, and an operator removes it everywhere in one change.
 
-`pytest.mark.slow` is registered for intentionally expensive stress, timeout,
-or network tests. Fast jobs run `-m "not slow"`; the full matrix and wheel
-tests have no marker filter and therefore include every test. CI runs pytest
-with `--durations=15`. No test currently qualifies: the whole suite takes about
-1.73 s, so even `test_no_memory_leak` stays unmarked and runs on every PR. A
-test would qualify if it takes more than 5 s on CI or needs the network.
+Fast jobs run `pytest -m "not slow"`; the full matrix and wheel tests use no
+marker filter and run every test. See
+[testing.md](testing.md#test-selection-and-local-commands) for what the `slow`
+marker means, why no test currently carries it, and the equivalent local
+commands.
 
 The composite action `.github/actions/setup-python-env`:
 - Sets `allow-prereleases: true` on `actions/setup-python@v5` so that new
