@@ -18,18 +18,51 @@ split into six logical files:
 
 ---
 
-## CI test selection
+## Test selection and local commands
 
-`slow` is a registered pytest marker for tests that deliberately use expensive
-stress, timeout, or network behavior. Push/PR CI runs `pytest -m "not slow"`;
-full scheduled, manual, release, and wheel runs use no marker filter and include
-every test. CI passes `--durations=15` so the GitHub logs record per-test time.
+`slow` (`pyproject.toml` `[tool.pytest.ini_options]`) is the only registered
+pytest marker, for tests that deliberately use expensive stress, timeout, or
+network behavior; this project has no `smoke` marker. Push/PR CI runs
+`pytest -m "not slow"`; full scheduled, manual, release, and wheel runs use no
+marker filter and include every test. CI passes `--durations=15` so the GitHub
+logs record per-test time. See [ci.md](ci.md#ci-mainyml) for the exact fast and
+full job matrices and when each one runs.
 
 **No test currently qualifies.** The whole suite takes about 1.73 s, and
 `test_no_memory_leak` (the only `tracemalloc` leak coverage) is a fast test that
 must run on every PR, so it is not marked. A test qualifies for `slow` only when
 it takes more than 5 s on CI or needs the network; check the `--durations=15`
 output in the CI logs before adding the marker.
+
+Run the same selections locally with [uv](https://docs.astral.sh/uv/):
+
+| Command | Runs |
+|---------|------|
+| `uv run --locked python -m pytest tests -m "not slow"` | Fast set, same as push/PR CI |
+| `uv run --locked python -m pytest tests` | Everything, same as the full matrix |
+| `uv run --locked python -m pytest tests -m slow` | Only the `slow`-marked tests |
+
+### Why the matrix is split
+
+This is a small project, and GitHub's macOS (and to a lesser degree Windows)
+runners are slow to queue and limited in free concurrent jobs, so the full
+interpreter x OS matrix on every push would make ordinary feedback slow and
+expensive. The shipped wheels are `cp310-abi3`, so a push only needs to prove
+the oldest and newest supported CPython, one free-threaded build, and PyPy
+still work; the full matrix — every supported interpreter, OS, and
+architecture — still runs before every release so nothing ships untested, see
+[ci.md](ci.md#release-gate).
+
+### Free-threaded builds (3.13t / 3.14t / 3.15t)
+
+`setup.py` turns off the stable ABI (`Py_LIMITED_API`/abi3) when
+`Py_GIL_DISABLED` is set, so free-threaded interpreters get a version-specific
+extension compiled from source instead of the shared abi3 build — see
+[build.md](build.md#stable-abi-detection) for how that detection works. The
+full CI matrix tests 3.13t/3.14t/3.15t from source; the fast set tests 3.15t.
+`cibuildwheel` skips `cp*t-*` (`pyproject.toml` `[tool.cibuildwheel]`), so no
+free-threaded wheel is ever built or shipped — only the from-source CI path
+exercises these interpreters.
 
 ---
 
