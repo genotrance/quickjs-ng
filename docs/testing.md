@@ -49,9 +49,9 @@ runners are slow to queue and limited in free concurrent jobs, so the full
 interpreter x OS matrix on every push would make ordinary feedback slow and
 expensive. The shipped wheels are `cp310-abi3`, so a push only needs to prove
 the oldest and newest supported CPython, one free-threaded build, and PyPy
-still work; the full matrix — every supported interpreter, OS, and
-architecture — still runs before every release so nothing ships untested, see
-[ci.md](ci.md#release-gate).
+still work; the full matrix — every supported interpreter on all three desktop
+OSes, plus native Linux ARM — still runs before every release so nothing ships
+untested, see [ci.md](ci.md#release-gate).
 
 ### Free-threaded builds (3.13t / 3.14t / 3.15t)
 

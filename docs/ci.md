@@ -4,7 +4,7 @@
 
 ## Workflow Overview
 
-Three workflows live under `.github/workflows/`:
+Four workflows live under `.github/workflows/`:
 
 | File | Trigger | Purpose |
 |------|---------|---------|
@@ -131,10 +131,11 @@ expected 4–6 minute build. The first release run records the hosted timing.
 | `workflow_call` | `sha` input (default: triggering commit) | `sha`, `version` (both optional) |
 | `workflow_dispatch` | `sha` input (default: head of the selected ref) | `sha`, `version` (both optional) |
 
-`check-upstream.yml` first runs the complete reusable `main.yml` matrix for the
-SHA and version of the commit it just pushed, then dispatches `build.yml`. The
-commit is built as is: `pyproject.toml` and the submodule pointer are not
-modified in the runner.
+`check-upstream.yml` commits the upstream update to `main`, then uses
+`actions/github-script` to dispatch `build.yml` (`workflow_dispatch`) for that
+exact SHA. `build.yml`'s `full-ci` job runs the complete reusable `main.yml`
+matrix once before the build. The commit is built as is: `pyproject.toml` and
+the submodule pointer are not modified in the runner.
 
 ### Jobs
 
@@ -142,7 +143,7 @@ modified in the runner.
 `pyproject.toml`. Fails if the `version` input differs or if the submodule is
 not at the upstream tag `vX.Y.Z` matching the version
 (see [versioning.md](versioning.md)).
-Outputs: `sha`, `upstream_tag`, `version`, `publish`.
+Outputs: `sha`, `upstream_tag`, `version`, `publish`, `build`.
 
 **`build-sdist`** — Builds a source distribution with `pipx run build --sdist`.
 
@@ -160,8 +161,8 @@ wheels. The duplicate abi3 compatibility test does not add a shipped wheel.
    also checks PyPI and, when the version is already published, skips the sdist
    and wheel builds and the publish job entirely (output `build=false`), so
    later pushes to `main` (Dependabot, lock or docs changes) are a no-op;
-   `main.yml` already tests every push. `workflow_dispatch` and `workflow_call`
-   (check-upstream) always build.
+   `main.yml` already tests every push. `workflow_dispatch` (including
+   check-upstream's dispatch) and `workflow_call` always build.
 3. Publishes to PyPI via Trusted Publishing (OIDC, `id-token: write`).
 4. Only after a successful upload, tags the built commit `vX.Y.Z.P` and pushes
    the tag.
@@ -221,7 +222,7 @@ skip = ["cp*t-*"]
 
 | Aspect | CI (`main.yml`) | Build wheels (`build.yml`) |
 |--------|-----------------|----------------------------|
-| Trigger | Every push + PR | Push to `main`, `workflow_call`/`dispatch` (after the full matrix on the same SHA) |
+| Trigger | Push/PR (fast); weekly, dispatch, full `workflow_call` (full) | Push to `main`, `workflow_call`/`dispatch` (after the full matrix on the same SHA) |
 | Speed | 7 test jobs on push/PR; complete matrix weekly/manual | 2–10 min (native aarch64; no QEMU) |
 | What it builds | C extension via `uv pip install -e .` | Binary abi3 wheels via `cibuildwheel` in Docker |
 | Test environment | Native host Python | Exact manylinux/musllinux/Windows wheel environment |
