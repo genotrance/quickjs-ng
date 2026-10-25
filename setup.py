@@ -48,4 +48,9 @@ _quickjs = Extension(
     py_limited_api=_use_stable_abi,
 )
 
-setup(ext_modules=[_quickjs])
+# ``pyproject.toml`` cannot express this runtime-dependent wheel option.
+# Keep it aligned with the extension setting so free-threaded and PyPy wheels
+# retain their interpreter-specific ABI tags.
+_bdist_wheel_options = {"bdist_wheel": {"py_limited_api": "cp310"}} if _use_stable_abi else {}
+
+setup(ext_modules=[_quickjs], options=_bdist_wheel_options)

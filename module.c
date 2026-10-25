@@ -1,5 +1,4 @@
-// CPython Stable ABI target: 3.10+
-#define Py_LIMITED_API 0x030A0000
+// Py_LIMITED_API, when applicable, is supplied by setup.py.
 #include <Python.h>
 #include <time.h>
 
