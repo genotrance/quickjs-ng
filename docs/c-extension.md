@@ -17,9 +17,10 @@ can break reference cycles between `Context` and `Object` instances.
 
 ### Motivation
 
-By targeting the CPython **stable ABI** (`Py_LIMITED_API = 0x030A0000`), wheels
-are forward-compatible with all Python ≥ 3.10. Free-threaded builds (cp313t,
-cp314t, cp315t) require separate wheels but benefit from the same stable API surface.
+On non-free-threaded CPython, targeting the **stable ABI**
+(`Py_LIMITED_API = 0x030A0000`) makes wheels forward-compatible with all Python
+≥ 3.10. Free-threaded builds (cp313t, cp314t, cp315t) use the full CPython API
+and require interpreter-specific wheels.
 
 ### What changes at the C level
 
@@ -36,16 +37,19 @@ cp314t, cp315t) require separate wheels but benefit from the same stable API sur
 | Type globals as `static PyTypeObject` | Type globals as `static PyObject *` |
 | `moduledef.m_size = sizeof(module_state)` | `moduledef.m_size = -1` (no per-module state) |
 
-### `#define Py_LIMITED_API`
+### `Py_LIMITED_API` build flag
 
-```c
-// CPython Stable ABI target: 3.10+
-#define Py_LIMITED_API 0x030A0000
-#include <Python.h>
+```python
+if _use_stable_abi:
+    extra_compile_args += ["-DPy_LIMITED_API=0x030A0000"]
 ```
 
-This define causes `Python.h` to expose only the stable API surface. Any use of
-an unstable symbol produces a compile error, preventing accidental ABI breakage.
+`setup.py` supplies this compiler flag only for non-free-threaded CPython,
+before `Python.h` is included. It causes `Python.h` to expose only the stable
+API surface, so any use of an unstable symbol produces a compile error. The
+flag is omitted for free-threaded CPython because its limited API leaves
+`PyObject` opaque, while this extension stores `PyObject_HEAD` in its instance
+structures.
 
 ### Type creation via `PyType_FromSpec`
 
@@ -245,9 +249,10 @@ _use_stable_abi = _is_cpython and not _freethreaded
 ```
 
 When `_use_stable_abi` is `False` (PyPy, free-threaded CPython), the
-`-DPy_LIMITED_API` compile flag and `py_limited_api=True` extension option are
-both omitted. The resulting `.so` carries the PyPy ABI tag
-(e.g. `_quickjs.pypy310-pp73-x86_64-linux-gnu.so`) rather than `abi3`.
+`-DPy_LIMITED_API` compile flag, `py_limited_api=True` extension option, and
+the `bdist_wheel` `py_limited_api` setting are all omitted. The resulting
+`.so` and wheel carry interpreter-specific ABI tags rather than `abi3` (for
+example, `_quickjs.pypy310-pp73-x86_64-linux-gnu.so` on PyPy).
 
 ### `runtime_gc` — portable `gc.collect()` call
 

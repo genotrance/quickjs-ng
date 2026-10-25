@@ -100,17 +100,19 @@ build-backend = "setuptools.build_meta"
 The original project used `hatchling`, which does not support C extensions
 defined in `setup.py`. Switched to `setuptools`.
 
-### Wheel tag
+### Wheel tag configuration
 
-```toml
-[tool.distutils.bdist_wheel]
-py_limited_api = "cp310"
+```python
+_bdist_wheel_options = (
+    {"bdist_wheel": {"py_limited_api": "cp310"}} if _use_stable_abi else {}
+)
+setup(..., options=_bdist_wheel_options)
 ```
 
-This tags the wheel `cp310-abi3-<platform>`, signalling to pip that the wheel
-is compatible with any CPython ≥ 3.10. Without this setting, setuptools would
-tag the wheel with the exact build interpreter (e.g. `cp313`), forcing a rebuild
-per version.
+`setup.py` supplies the wheel option only for non-free-threaded CPython. This
+tags those wheels `cp310-abi3-<platform>`, signalling to pip that they are
+compatible with any CPython ≥ 3.10. Free-threaded CPython and PyPy leave the
+option unset, so their wheels retain interpreter-specific tags.
 
 ### Removed compile-time macros
 

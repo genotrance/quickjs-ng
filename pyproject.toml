@@ -35,9 +35,6 @@ dev = [
 [tool.setuptools]
 packages = ["quickjs"]
 
-[tool.distutils.bdist_wheel]
-py_limited_api = "cp310"
-
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
