@@ -122,6 +122,7 @@ jobs:
         uses: ./.github/actions/setup-python-env
         with:
           python-version: ${{ matrix.python-version }}
+          uv-sync-args: --no-default-groups --group test
 
       - name: Run tests
-        run: uv run --locked python -m pytest tests ${{ matrix.pytest-args }} --durations=15 --cov --cov-config=pyproject.toml --cov-report=xml
+        run: uv run --locked --no-default-groups --group test python -m pytest tests ${{ matrix.pytest-args }} --durations=15 --cov --cov-config=pyproject.toml --cov-report=xml
