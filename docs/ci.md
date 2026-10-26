@@ -97,6 +97,11 @@ commands.
 The composite action `.github/actions/setup-python-env`:
 - Sets `allow-prereleases: true` on `actions/setup-python@v5` so that new
   CPython releases and PyPy can be installed as they enter the support window.
+- Takes a `uv-sync-args` input appended to `uv sync --locked` (default empty:
+  all default groups). The test matrix passes
+  `--no-default-groups --group test` so tests install only the `test`
+  dependency group (pytest, pytest-cov) and not mypy, whose `ast-serialize`
+  dependency has no wheel on 3.15t. The quality job keeps the full `dev` group.
 - Runs `uv pip install setuptools` before `uv pip install -e .` because PyPy
   venvs created by `uv sync` do not include `setuptools` by default, which is
   required to build the C extension.
@@ -345,5 +350,5 @@ the wheel jobs start only after it succeeds.
 ## Lock file enforcement
 
 The setup action uses `uv sync --locked` and the test step uses
-`uv run --locked`; CI fails if `uv.lock` is out of date. Dependabot's `uv`
+`uv run --locked --no-default-groups --group test`; CI fails if `uv.lock` is out of date. Dependabot's `uv`
 ecosystem (monthly, minor/patch grouped) proposes upgrades.

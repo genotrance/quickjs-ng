@@ -24,11 +24,14 @@ Homepage = "https://github.com/genotrance/quickjs-ng"
 Repository = "https://github.com/genotrance/quickjs-ng"
 
 [dependency-groups]
-dev = [
+test = [
     "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+]
+dev = [
+    {include-group = "test"},
     "pre-commit>=4.5.1",
     "mypy>=2.4.0; platform_python_implementation != 'PyPy'",
-    "pytest-cov>=7.0.0",
     "ruff>=0.14.14",
 ]
 

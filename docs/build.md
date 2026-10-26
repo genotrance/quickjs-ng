@@ -188,6 +188,9 @@ x86 support).
 
 ## Dependency lock
 
+Dependency groups: `test` (pytest, pytest-cov) is what the CI test jobs sync;
+`dev` includes `test` plus pre-commit, mypy and ruff (default for `uv sync`).
+
 `uv.lock` is tracked in git and CI runs `uv sync --locked` / `uv run --locked`,
 so a stale lock fails the build. Dependabot opens grouped monthly PRs for
 routine upgrades. To upgrade manually, run `uv lock --upgrade` (or

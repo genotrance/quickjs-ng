@@ -38,9 +38,9 @@ Run the same selections locally with [uv](https://docs.astral.sh/uv/):
 
 | Command | Runs |
 |---------|------|
-| `uv run --locked python -m pytest tests -m "not slow"` | Fast set, same as push/PR CI |
-| `uv run --locked python -m pytest tests` | Everything, same as the full matrix |
-| `uv run --locked python -m pytest tests -m slow` | Only the `slow`-marked tests |
+| `uv run --locked --no-default-groups --group test python -m pytest tests -m "not slow"` | Fast set, same as push/PR CI |
+| `uv run --locked --no-default-groups --group test python -m pytest tests` | Everything, same as the full matrix |
+| `uv run --locked --no-default-groups --group test python -m pytest tests -m slow` | Only the `slow`-marked tests |
 
 ### Why the matrix is split
 
