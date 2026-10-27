@@ -165,7 +165,7 @@ jobs:
           submodules: recursive
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v4.3.3
+        uses: pypa/cibuildwheel@v4.3.4
         env:
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
           CIBW_MANYLINUX_I686_IMAGE: ${{ matrix.cibw_manylinux_image && format('quay.io/pypa/{0}_i686', matrix.cibw_manylinux_image) || '' }}
