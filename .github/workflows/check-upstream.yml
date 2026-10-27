@@ -112,7 +112,7 @@ jobs:
       actions: write
     steps:
       - name: Trigger the gated build at the committed SHA
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           BUILD_SHA: ${{ needs.check.outputs.sha }}
           BUILD_VERSION: ${{ needs.check.outputs.version }}
