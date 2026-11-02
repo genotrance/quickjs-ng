@@ -276,6 +276,13 @@ class MemoryAndLimits(unittest.TestCase):
         self.ctx.set_time_limit(-1)
         self.ctx.eval(code)
 
+    def test_time_limit_interrupts_infinite_loop(self):
+        self.ctx.set_time_limit(0.1)
+        with self.assertRaisesRegex(quickjs.JSException, "InternalError: interrupted"):
+            self.ctx.eval("while (true) {}")
+        self.ctx.set_time_limit(-1)
+        self.assertEqual(self.ctx.eval("1 + 1"), 2)
+
     def test_gc_manual(self):
         self.ctx.eval("""
             var a = {}; var b = {};
