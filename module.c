@@ -57,7 +57,7 @@ static void quickjs_exception_to_python(JSContext *context);
 static PyObject *quickjs_to_python(RuntimeData *runtime_data, JSValue value);
 
 // Returns nonzero if we should stop due to a time limit.
-static int js_interrupt_handler(JSRuntime *rt, void *opaque) {
+static int js_interrupt_handler(JSContext *ctx, void *opaque) {
 	InterruptData *data = opaque;
 	if (clock() - data->start >= data->limit) {
 		return 1;

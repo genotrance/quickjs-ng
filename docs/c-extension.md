@@ -231,6 +231,20 @@ if (strstr(cstring, "stack overflow") != NULL ||
     PyErr_Format(StackOverflow, ...);
 ```
 
+### `JSInterruptHandler` signature change (v0.18.0)
+
+quickjs-ng v0.18.0 changed the interrupt handler callback to receive a
+`JSContext *` instead of a `JSRuntime *`:
+
+| Version     | Signature                                                |
+|-------------|----------------------------------------------------------|
+| Before      | `int JSInterruptHandler(JSRuntime *rt, void *opaque)`    |
+| v0.18.0+    | `int JSInterruptHandler(JSContext *ctx, void *opaque)`   |
+
+`js_interrupt_handler` (used by `set_time_limit`) was updated to take
+`JSContext *ctx` to match. It does not otherwise need the context, since the
+elapsed time is tracked in the `InterruptData` struct passed as `opaque`.
+
 ---
 
 ## PyPy Support
