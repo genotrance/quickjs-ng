@@ -81,7 +81,7 @@ Each `Context` owns an isolated QuickJS runtime — there is no shared state bet
 
 ## Versioning
 
-Version format is `X.Y.Z.P` where `X.Y.Z` matches the upstream quickjs-ng tag and `P` is the wrapper patch (starts at 1 per upstream release). Development, Dependabot updates, and fixes target `devel`. A release bumps the wrapper version on `devel`, then merges `devel` into `main`, where wheels are built and published from exactly that commit. The monthly upstream check commits to `main`; merge `main` back into `devel` afterwards.
+Version format is `X.Y.Z.P` where `X.Y.Z` matches the upstream quickjs-ng tag and `P` is the wrapper patch (starts at 1 per upstream release). Development, Dependabot updates, and fixes target `devel`. A release bumps the wrapper version on `devel`, then merges `devel` into `main`, where wheels are built and published from exactly that commit. The monthly upstream check commits to `main` and dispatches that build; once it really publishes, `main` is merged back into `devel` automatically (a conflict opens a pull request against `devel` instead). See [docs/ci.md](docs/ci.md#back-merge-back-mergeyml).
 
 ## Development
 
@@ -114,8 +114,9 @@ Bug reports and pull requests are welcome at <https://github.com/genotrance/quic
 5. Open a pull request to `devel`. Fast CI covers representative oldest/newest CPython, free-threaded, PyPy, Windows, macOS, and native Linux ARM paths; weekly, manual, and release runs (every publish path is gated on the full matrix for the exact commit) cover CPython 3.10–3.15 (including 3.13t/3.14t/3.15t) and PyPy 3.10/3.11 across all three desktop OSes.
 
 Dependabot updates and fixes also target `devel`. For a release, bump the
-wrapper version there and merge `devel` into `main`; after the automatic
-upstream release, merge `main` back into `devel`.
+wrapper version there and merge `devel` into `main`. The automatic upstream
+release merges `main` back into `devel` itself once it publishes; a conflict
+opens a pull request against `devel` instead of merging silently.
 
 ## Documentation
 

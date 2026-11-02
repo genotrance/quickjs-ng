@@ -43,7 +43,10 @@ it is updated in the same commit.
 If `main` already carries the bump for that upstream tag (for example an
 earlier run committed it but the build failed), the commit is skipped and the
 build is dispatched for the current `main` head, keeping the existing wrapper
-patch. Merge `main` back into `devel` after the automatic release.
+patch. Once that build's `publish` job really uploads the release (not
+skipped because the version is already on PyPI, not failed), `back-merge.yml`
+merges `main` back into `devel` automatically; a conflict opens a pull request
+against `devel` instead (see [ci.md](ci.md#back-merge-back-mergeyml)).
 
 Manual equivalent:
 
