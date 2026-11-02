@@ -145,7 +145,9 @@ produce an sdist that fails to build after an upstream update.
 `upstream-quickjs` is pinned to an upstream tag, and `pyproject.toml` carries the
 matching `X.Y.Z.P` version (see [versioning.md](versioning.md)). Both are
 committed together on `main`, normally by `check-upstream.yml`, and
-`build.yml` builds exactly that commit without modifying either. Locally:
+`build.yml` builds exactly that commit without modifying either. After a
+successful publish, `back-merge.yml` merges `main` back into `devel`
+automatically (see [ci.md](ci.md#back-merge-back-mergeyml)). Locally:
 
 ```bash
 git submodule update --init

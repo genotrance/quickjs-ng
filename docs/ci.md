@@ -4,14 +4,19 @@
 
 ## Workflow Overview
 
-Four workflows live under `.github/workflows/`:
+Five workflows live under `.github/workflows/`:
 
 | File | Trigger | Purpose |
 |------|---------|---------|
 | `main.yml` | Push/PR, weekly schedule, dispatch, reusable call | Fast or complete regression coverage (pytest) |
 | `build.yml` | Push to `main`, `workflow_call`, `workflow_dispatch` | Run the full CI matrix on the exact commit, then build abi3 wheels + sdist, publish to PyPI, tag |
-| `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` | Detect a new upstream tag, commit to `main`, then dispatch the (self-gated) wheel build |
+| `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` (`dry_run` input) | Detect a new upstream tag, commit to `main`, dispatch the (self-gated) wheel build, then call `back-merge.yml` once that build really publishes |
+| `back-merge.yml` | `workflow_call`, `workflow_dispatch` (`dry_run` input) | Merge `main` into `devel` after a release, or open a conflict pull request |
 | `python-support.yml` | Monthly cron (1st of month, 07:00 UTC), `workflow_dispatch` | Open an issue when the official CPython support window differs from package classifiers |
+
+`check-upstream.yml`'s `schedule` trigger only runs from the repository's
+default branch, so the workflow *file* lives on `devel`, even though the
+commit, build and back-merge it drives all happen on/against `main`.
 
 ---
 
@@ -20,9 +25,11 @@ Four workflows live under `.github/workflows/`:
 `devel` is the development branch: pull requests, Dependabot updates, and fixes
 target it. A release bumps the wrapper version on `devel` and merges `devel`
 into `main`; that merge triggers `build.yml`, which publishes and tags the
-release commit. The monthly upstream check still commits its update to `main`;
-merge `main` back into `devel` afterwards so development includes the upstream
-release.
+release commit. The monthly upstream check commits its update to `main` and,
+once `build.yml` reports a real publish (not skipped, not failed) for that
+commit, `back-merge.yml` merges `main` back into `devel` automatically so
+development always includes the released upstream bump — see
+[Back-merge](#back-merge-back-mergeyml) below.
 
 ## CI (`main.yml`)
 
@@ -247,7 +254,9 @@ the exact published artifact in the exact target environment and handles publish
 
 ## Check Upstream (`check-upstream.yml`)
 
-Runs monthly on the 1st at 06:00 UTC, and on `workflow_dispatch`.
+Runs monthly on the 1st at 06:00 UTC, and on `workflow_dispatch` (input
+`dry_run`, boolean, default `false`; the schedule trigger never sets it, so
+scheduled runs are never dry).
 
 ### How it works
 
@@ -261,14 +270,30 @@ Runs monthly on the 1st at 06:00 UTC, and on `workflow_dispatch`.
 5. Updates `upstream-quickjs` to the upstream tag and `pyproject.toml` /
    `uv.lock` to `X.Y.Z.1` (or keeps the version if `main` already has that
    upstream's bump), commits `Update upstream quickjs-ng to vX.Y.Z (version
-   X.Y.Z.P)` and pushes it to `main`. No commit is made if nothing changed.
+   X.Y.Z.P)` and pushes it to `main`. No commit is made if nothing changed. In
+   a dry run the commit is made locally and its diffstat is printed, but it is
+   never pushed.
 6. Dispatches `build.yml` on `main` with `sha` set to the committed `HEAD` and
    `version` set to the new version. `build.yml` runs the full matrix on that
    SHA (`full-ci`) before it builds or publishes; the matrix is not run twice.
+   Skipped in a dry run.
+7. `wait-for-build` finds the dispatched run (the dispatch API call does not
+   return a run id, so it lists `build.yml`'s `workflow_dispatch` runs and
+   matches the one created at or after the dispatch for this `sha`), polls it
+   until it completes, and reads the `publish` job's `Publish to PyPI` step
+   conclusion from the run's jobs. Skipped in a dry run.
+8. `back-merge` calls [`back-merge.yml`](#back-merge-back-mergeyml) only when
+   that step concluded `success` — i.e. the upload actually ran, not `skipped`
+   (version already on PyPI) and not `failure` (gate or upload failed). A dry
+   run instead always runs `back-merge-dry-run`, which previews the back-merge
+   against the current `origin/main` and `origin/devel` regardless of whether
+   a release was needed.
 
 ```
 upstream version <= released base  →  no action
 upstream version > released base → commit bump to main, dispatch build.yml at that SHA (which runs full CI first)
+build.yml publish step succeeds (real upload) → back-merge main into devel
+build.yml publish step skipped or fails → no back-merge
 ```
 
 Retries: if any step fails, re-run the workflow. An already committed bump is
@@ -289,6 +314,14 @@ jobs:
   trigger-build:
     permissions:
       actions: write    # required to call createWorkflowDispatch
+  wait-for-build:
+    permissions:
+      actions: read     # required to list and poll the dispatched run
+  back-merge / back-merge-dry-run:
+    permissions:
+      contents: write        # merge and push devel, or push a conflict branch
+      pull-requests: write   # open/reuse the conflict pull request
+      actions: write         # dispatch main.yml on devel or the conflict branch
 ```
 
 The `GITHUB_TOKEN` for scheduled workflows defaults to read-only. Without
@@ -307,10 +340,54 @@ whichever branch the workflow run itself was started from.
 gh workflow run "Check upstream quickjs-ng" --repo genotrance/quickjs-ng --ref devel
 ```
 
+Dry run (runs every check and the back-merge preview, pushes and dispatches
+nothing):
+
+```bash
+gh workflow run check-upstream.yml --repo genotrance/quickjs-ng --ref devel -f dry_run=true
+```
+
 Then watch:
 
 ```bash
 gh run watch --repo genotrance/quickjs-ng
+```
+
+---
+
+## Back-merge (`back-merge.yml`)
+
+A reusable workflow (`workflow_call` and `workflow_dispatch`, input `dry_run`,
+boolean, default `false`) that merges `main` into `devel` after a release, so
+`devel` always contains what was released and the two branches never diverge
+on version/submodule state. `check-upstream.yml` calls it once `build.yml`'s
+`publish` step actually uploads (see [How it works](#how-it-works) above); it
+can also be run by hand.
+
+### How it works
+
+1. Checks out `devel` and fetches `main`.
+2. If `origin/main` is already an ancestor of `devel`, there is nothing to do
+   and the job succeeds immediately.
+3. Otherwise runs `git merge --no-ff origin/main` on `devel`:
+   - Clean merge: pushes the result to `devel` as a fast-forward of the
+     remote (never `--force`; a concurrent push makes this fail safely with
+     no retry), then dispatches `main.yml` on `devel` (a `GITHUB_TOKEN` push
+     does not trigger other workflows by itself).
+   - Conflict: aborts the merge, pushes `main`'s commit to
+     `backmerge/main-<shortsha>`, opens a pull request against `devel`
+     (reusing an open one for that branch instead of duplicating it),
+     dispatches `main.yml` on that branch, and fails the job with `::error::`
+     so the conflict is visible and actionable.
+4. `dry_run: true` runs the same merge locally and reports which of the three
+   outcomes above applies (nothing to do / clean / conflict), but never
+   pushes `devel`, never pushes a conflict branch, and never opens a pull
+   request or dispatches CI.
+
+Manual dry run against the current `origin/main` and `origin/devel`:
+
+```bash
+gh workflow run back-merge.yml --repo genotrance/quickjs-ng --ref devel -f dry_run=true
 ```
 
 ## Operator verification
