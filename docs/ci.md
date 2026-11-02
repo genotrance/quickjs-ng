@@ -10,7 +10,7 @@ Four workflows live under `.github/workflows/`:
 |------|---------|---------|
 | `main.yml` | Push/PR, weekly schedule, dispatch, reusable call | Fast or complete regression coverage (pytest) |
 | `build.yml` | Push to `main`, `workflow_call`, `workflow_dispatch` | Run the full CI matrix on the exact commit, then build abi3 wheels + sdist, publish to PyPI, tag |
-| `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` | Detect a new upstream tag, commit to `main`, then dispatch the (self-gated) wheel build |
+| `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` | Detect a new upstream tag, open an update PR to `devel`, then dispatch full CI on its branch |
 | `python-support.yml` | Monthly cron (1st of month, 07:00 UTC), `workflow_dispatch` | Open an issue when the official CPython support window differs from package classifiers |
 
 ---
@@ -20,9 +20,8 @@ Four workflows live under `.github/workflows/`:
 `devel` is the development branch: pull requests, Dependabot updates, and fixes
 target it. A release bumps the wrapper version on `devel` and merges `devel`
 into `main`; that merge triggers `build.yml`, which publishes and tags the
-release commit. The monthly upstream check still commits its update to `main`;
-merge `main` back into `devel` afterwards so development includes the upstream
-release.
+release commit. The monthly upstream check opens its update as a pull request
+to `devel`; review and merge it before the normal release merge.
 
 ## CI (`main.yml`)
 
@@ -53,13 +52,13 @@ name.
 
 ### Release gate
 
-Three paths can publish to PyPI, and all three run through `build.yml`: a push
-to `main` carrying a new version, a manual `workflow_dispatch` of `build.yml`,
-and `check-upstream.yml`'s dispatch of `build.yml` after it commits a version
-bump to `main`. `build.yml`'s `full-ci` job calls `main.yml` with
+Two paths can publish to PyPI, and both run through `build.yml`: a push to
+`main` carrying a new version and a manual `workflow_dispatch` of `build.yml`.
+`check-upstream.yml` only opens a PR to `devel` and dispatches CI; it never
+builds or publishes. `build.yml`'s `full-ci` job calls `main.yml` with
 `sha=<resolved SHA>` and `full: true` (`permissions: contents: read`).
 `build-sdist` and `build-wheels` need `full-ci`, and `publish` needs all of
-them, so for every one of the three paths nothing uploads unless the full
+them, so for either path nothing uploads unless the full
 matrix passed on the exact SHA being built — there is no code path in
 `build.yml` that reaches `publish` without `full-ci` having succeeded first.
 `full-ci` runs only when `setup` decides to build: a push to `main` whose
@@ -136,11 +135,10 @@ expected 4–6 minute build. The first release run records the hosted timing.
 | `workflow_call` | `sha` input (default: triggering commit) | `sha`, `version` (both optional) |
 | `workflow_dispatch` | `sha` input (default: head of the selected ref) | `sha`, `version` (both optional) |
 
-`check-upstream.yml` commits the upstream update to `main`, then uses
-`actions/github-script` to dispatch `build.yml` (`workflow_dispatch`) for that
-exact SHA. `build.yml`'s `full-ci` job runs the complete reusable `main.yml`
-matrix once before the build. The commit is built as is: `pyproject.toml` and
-the submodule pointer are not modified in the runner.
+After an upstream update PR is merged to `devel`, the normal release merge to
+`main` triggers `build.yml`. Its `full-ci` job runs the complete reusable
+`main.yml` matrix once before the build. The commit is built as is:
+`pyproject.toml` and the submodule pointer are not modified in the runner.
 
 ### Jobs
 
@@ -166,8 +164,8 @@ wheels. The duplicate abi3 compatibility test does not add a shipped wheel.
    also checks PyPI and, when the version is already published, skips the sdist
    and wheel builds and the publish job entirely (output `build=false`), so
    later pushes to `main` (Dependabot, lock or docs changes) are a no-op;
-   `main.yml` already tests every push. `workflow_dispatch` (including
-   check-upstream's dispatch) and `workflow_call` always build.
+   `main.yml` already tests every push. `workflow_dispatch` and
+   `workflow_call` always build.
 3. Publishes to PyPI via Trusted Publishing (OIDC, `id-token: write`).
 4. Only after a successful upload, tags the built commit `vX.Y.Z.P` and pushes
    the tag.
@@ -244,33 +242,38 @@ Runs monthly on the 1st at 06:00 UTC, and on `workflow_dispatch`.
 
 ### How it works
 
-1. Checks out `main` with submodules and all tags.
+1. Checks out `devel` with submodules and all tags.
 2. Finds the latest stable upstream tag (`vX.Y.Z`) with `git ls-remote`.
 3. Determines what has been released: the newest of the repository's `vX.Y.Z.P`
    tags and the latest version on PyPI. Its `X.Y.Z` part is the released base.
 4. If the upstream version is newer than the released base, a release is needed
    (the committed submodule is not used for this decision, so a committed but
    unreleased bump is retried).
-5. Updates `upstream-quickjs` to the upstream tag and `pyproject.toml` /
-   `uv.lock` to `X.Y.Z.1` (or keeps the version if `main` already has that
-   upstream's bump), commits `Update upstream quickjs-ng to vX.Y.Z (version
-   X.Y.Z.P)` and pushes it to `main`. No commit is made if nothing changed.
-6. Dispatches `build.yml` on `main` with `sha` set to the committed `HEAD` and
-   `version` set to the new version. `build.yml` runs the full matrix on that
-   SHA (`full-ci`) before it builds or publishes; the matrix is not run twice.
+5. Does nothing if `upstream/quickjs-ng-vX.Y.Z` already exists, an open PR uses
+   that branch, or `devel` already has the upstream commit and version.
+   Otherwise, it updates `upstream-quickjs` to the upstream tag and
+   `pyproject.toml` / `uv.lock` to `X.Y.Z.1` (or keeps the existing wrapper
+   patch), commits `Update upstream quickjs-ng to vX.Y.Z (version X.Y.Z.P)`,
+   and pushes the commit to that bot branch.
+6. Opens a pull request from the bot branch to `devel`, then dispatches
+   `main.yml` with `full=true` on the bot branch. This explicit dispatch is
+   necessary because pushes and pull requests created with `GITHUB_TOKEN` do
+   not trigger `push` or `pull_request` workflows.
+7. After review, merge the PR into `devel`. Release it later through the
+   normal `devel` to `main` release merge, which triggers `build.yml`.
 
 ```
 upstream version <= released base  →  no action
-upstream version > released base → commit bump to main, dispatch build.yml at that SHA (which runs full CI first)
+upstream version > released base → create an update PR to devel and dispatch full CI on its branch
 ```
 
-Retries: if any step fails, re-run the workflow. An already committed bump is
-reused and `build.yml` skips PyPI upload for versions that are already published.
+Retries are idempotent: an existing bot branch or open PR prevents a duplicate
+update. A merged update remains on `devel` until the normal release merge.
 
-The push uses `GITHUB_TOKEN`, which does not trigger other workflows, so the
-push does not start `build.yml` or `main.yml` by itself. The `actions: write`
-trigger job dispatches `build.yml`, whose own `full-ci` gate tests the commit. If `main` has branch protection, the Actions bot must
-be allowed to push to it.
+The branch push and PR use `GITHUB_TOKEN`, which does not trigger other
+workflows. The `actions: write` job therefore explicitly dispatches `main.yml`
+with `full=true` for the bot branch. The Actions bot must be allowed to create
+the `upstream/*` branch and pull request.
 
 ### Required permissions
 
@@ -278,21 +281,26 @@ be allowed to push to it.
 jobs:
   check:
     permissions:
-      contents: write   # required to push the bump commit to main
-  trigger-build:
+      contents: write         # required to push the bot branch
+      pull-requests: read     # required to check for an open update PR
+  open-pull-request:
     permissions:
-      actions: write    # required to call createWorkflowDispatch
+      pull-requests: write    # required to create the update PR
+  trigger-ci:
+    permissions:
+      actions: write          # required to call createWorkflowDispatch
 ```
 
 The `GITHUB_TOKEN` for scheduled workflows defaults to read-only. Without
-`actions: write`, the dispatch call returns HTTP 403 `Resource not accessible by
-integration`.
+the listed permissions, creating the branch/PR or dispatching CI returns HTTP
+403 `Resource not accessible by integration`.
 
 ### Target branch
 
-The bump is committed to `main` and the dispatch targets `ref: 'main'` — the
-stable branch that triggers publishing. The workflow always checks out `main`,
-whichever branch the workflow run itself was started from.
+The update is committed to `upstream/quickjs-ng-vX.Y.Z` and its pull request
+targets `devel`; the full-CI dispatch targets that bot branch. The workflow
+always checks out `devel`, whichever branch the workflow run itself was started
+from. It never pushes to or dispatches a workflow on `main`.
 
 ### Operator-approved release dispatch
 
@@ -325,9 +333,9 @@ gh run list --repo genotrance/quickjs-ng --workflow main.yml --branch devel --li
 gh run watch --repo genotrance/quickjs-ng
 ```
 
-The scheduled full run needs no dispatch. During an upstream release,
-`check-upstream.yml` dispatches `build.yml`, which runs the full matrix itself
-before publishing.
+The scheduled full run needs no dispatch. During an upstream update,
+`check-upstream.yml` dispatches full CI on the update PR branch; publishing
+waits for the later `devel` to `main` release merge.
 
 ### Expected runs for the 3.10 / release-gate change
 
