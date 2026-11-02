@@ -15,16 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: read
     outputs:
       sha: ${{ steps.commit.outputs.sha }}
-      branch: ${{ steps.commit.outputs.branch }}
       version: ${{ steps.commit.outputs.version }}
-      update_created: ${{ steps.commit.outputs.created }}
+      release_needed: ${{ steps.check.outputs.needed }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: devel
+          ref: main
           submodules: recursive
           fetch-depth: 0
 
@@ -72,33 +70,15 @@ jobs:
             echo "Release needed: upstream $UPSTREAM, released base ${RELEASED_BASE:-none}"
           fi
 
-      - name: Create upstream update branch
+      - name: Commit upstream update to main
         id: commit
         if: steps.check.outputs.needed == 'true'
         env:
           TAG: ${{ steps.upstream.outputs.tag }}
           UPSTREAM: ${{ steps.upstream.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
         run: |
-          BRANCH="upstream/quickjs-ng-$TAG"
-          skip_update() {
-            echo "created=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          }
-
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
-            echo "Branch $BRANCH already exists; no update created"
-            skip_update
-          fi
-          if [ "$(gh pr list --repo "$GITHUB_REPOSITORY" --base devel --head "$BRANCH" --state open --json number --jq 'length')" != 0 ]; then
-            echo "An open pull request already uses $BRANCH; no update created"
-            skip_update
-          fi
-
           git -C upstream-quickjs fetch --tags origin
           git -C upstream-quickjs checkout --detach "$TAG"
-          UPSTREAM_SHA=$(git -C upstream-quickjs rev-parse HEAD)
-          CURRENT_UPSTREAM_SHA=$(git rev-parse HEAD:upstream-quickjs)
 
           CURRENT_VER=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)
           if [ "${CURRENT_VER%.*}" = "$UPSTREAM" ]; then
@@ -108,74 +88,43 @@ jobs:
             VERSION="${UPSTREAM}.1"
           fi
 
-          if [ "$CURRENT_UPSTREAM_SHA" = "$UPSTREAM_SHA" ] && [ "$CURRENT_VER" = "$VERSION" ]; then
-            echo "devel already contains $TAG at version $VERSION"
-            skip_update
-          fi
-
           sed -i "0,/^version = \".*\"/s//version = \"$VERSION\"/" pyproject.toml
           # Keep uv.lock in sync (CI runs `uv lock --locked`)
           sed -i "/^name = \"quickjs-ng\"\$/{n;s/^version = .*/version = \"$VERSION\"/}" uv.lock
 
           git add upstream-quickjs pyproject.toml uv.lock
           if git diff --cached --quiet; then
-            echo "devel already contains $TAG and version $VERSION"
-            skip_update
+            echo "main already contains $TAG and version $VERSION"
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git commit -m "Update upstream quickjs-ng to $TAG (version $VERSION)"
-            git push origin "HEAD:refs/heads/$BRANCH"
-            {
-              echo "created=true"
-              echo "branch=$BRANCH"
-              echo "sha=$(git rev-parse HEAD)"
-              echo "version=$VERSION"
-            } >> "$GITHUB_OUTPUT"
+            git push origin HEAD:main
           fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  open-pull-request:
+  trigger-build:
     needs: check
-    if: needs.check.outputs.update_created == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    steps:
-      - name: Open the upstream update pull request
-        uses: actions/github-script@v9
-        env:
-          BRANCH: ${{ needs.check.outputs.branch }}
-          VERSION: ${{ needs.check.outputs.version }}
-        with:
-          script: |
-            await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `Update upstream quickjs-ng to ${process.env.BRANCH.replace('upstream/quickjs-ng-', '')} (version ${process.env.VERSION})`,
-              head: process.env.BRANCH,
-              base: 'devel',
-              body: 'Automated upstream update. The full CI workflow was dispatched for this branch.'
-            });
-
-  trigger-ci:
-    needs: [check, open-pull-request]
-    if: needs.check.outputs.update_created == 'true'
+    if: needs.check.outputs.release_needed == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
-      - name: Trigger full CI on the pull request branch
+      - name: Trigger the gated build at the committed SHA
         uses: actions/github-script@v9
         env:
-          BRANCH: ${{ needs.check.outputs.branch }}
+          BUILD_SHA: ${{ needs.check.outputs.sha }}
+          BUILD_VERSION: ${{ needs.check.outputs.version }}
         with:
           script: |
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'main.yml',
-              ref: process.env.BRANCH,
+              workflow_id: 'build.yml',
+              ref: 'main',
               inputs: {
-                full: 'true'
+                sha: process.env.BUILD_SHA,
+                version: process.env.BUILD_VERSION
               }
             });

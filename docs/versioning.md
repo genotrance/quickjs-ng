@@ -37,15 +37,13 @@ it is updated in the same commit.
    tags and the latest version on PyPI. Its `X.Y.Z` part is the released base.
 3. If the upstream version is newer than the released base, update the
    submodule to the upstream tag, set `pyproject.toml` (and `uv.lock`) to
-   `X.Y.Z.1`, and open a pull request to `devel` from
-   `upstream/quickjs-ng-vX.Y.Z`. The workflow dispatches the full `main.yml`
-   CI matrix on that branch; merging the reviewed PR into `devel` does not
-   publish a release.
+   `X.Y.Z.1`, commit and push to `main`, then dispatch `build.yml` with that
+   commit SHA and version.
 
-The workflow does nothing when that bot branch or an open pull request for the
-tag already exists, or when `devel` already has the upstream commit and
-version. After the PR is merged and the change is ready to release, merge
-`devel` into `main` through the normal release process.
+If `main` already carries the bump for that upstream tag (for example an
+earlier run committed it but the build failed), the commit is skipped and the
+build is dispatched for the current `main` head, keeping the existing wrapper
+patch. Merge `main` back into `devel` after the automatic release.
 
 Manual equivalent:
 
