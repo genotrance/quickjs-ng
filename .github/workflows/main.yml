@@ -98,6 +98,7 @@ jobs:
               {"os": "ubuntu-latest", "python-version": "3.15t", "pytest-args": "-m 'not slow'"},
               {"os": "ubuntu-latest", "python-version": "pypy3.11", "pytest-args": "-m 'not slow'"},
               {"os": "windows-latest", "python-version": "3.15", "pytest-args": "-m 'not slow'"},
+              {"os": "windows-latest", "python-version": "pypy3.11", "pytest-args": "-m 'not slow'"},
               {"os": "macos-latest", "python-version": "3.15", "pytest-args": "-m 'not slow'"},
               {"os": "ubuntu-24.04-arm", "python-version": "3.15", "pytest-args": "-m 'not slow'"},
           ]

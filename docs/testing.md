@@ -100,7 +100,7 @@ x86_64/i686):
 limit = 500
 
 # AFTER — set an explicit 64 KB JS stack; 300 frames overflows on every arch
-# (64-bit: overflows at ~89 frames; 32-bit i686: overflows at ~178 frames)
+# (64-bit GCC/Clang: ~89 frames; MSVC: ~17 frames; 32-bit i686: ~178 frames)
 f.set_max_stack_size(64 * 1024)
 with self.assertRaises(quickjs.StackOverflow):
     f(300)
@@ -108,6 +108,12 @@ with self.assertRaises(quickjs.StackOverflow):
 f.set_max_stack_size(256 * 1024)
 self.assertEqual(f(50), 50)
 ```
+
+`test_recursion_depth_margin` additionally requires `f(60)` to succeed in 256 KB,
+so a compiler or flag change that inflates the per-call C stack frame (MSVC
+`/O2 /GL` uses ~5.2 KB, which left a one-frame margin) fails loudly instead of
+making `test_deep_recursion` flaky. Windows builds use `/GL- /Os` to keep the
+frame near ~3.7 KB (about 70 frames at 256 KB).
 
 ---
 

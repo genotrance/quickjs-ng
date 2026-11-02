@@ -16,7 +16,7 @@ extra_link_args: list[str] = []
 
 if sys.platform == "win32":
     extra_link_args = ["-static"]
-    extra_compile_args = ["/std:c11"]
+    extra_compile_args = ["/std:c11", "/GL-", "/Os"]
     if _use_stable_abi:
         extra_compile_args += ["/DPy_LIMITED_API=0x030A0000"]
 else:
