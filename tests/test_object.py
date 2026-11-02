@@ -239,6 +239,15 @@ class FunctionHelper(unittest.TestCase):
         f.set_max_stack_size(256 * 1024)
         self.assertEqual(f(50), 50)
 
+    def test_recursion_depth_margin(self):
+        f = quickjs.Function(
+            "f",
+            "function f(v) { return v <= 0 ? 0 : 1 + f(v - 1); }",
+            own_executor=True,
+        )
+        f.set_max_stack_size(256 * 1024)
+        self.assertEqual(f(60), 60)
+
     def test_add_callable(self):
         f = quickjs.Function(
             "f",

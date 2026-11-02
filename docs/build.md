@@ -47,7 +47,7 @@ _use_stable_abi = _is_cpython and not _freethreaded
 ```python
 if sys.platform == "win32":
     extra_link_args = ["-static"]
-    extra_compile_args = ["/std:c11"]
+    extra_compile_args = ["/std:c11", "/GL-", "/Os"]
     if _use_stable_abi:
         extra_compile_args += ["/DPy_LIMITED_API=0x030A0000"]
 else:
@@ -61,6 +61,15 @@ else:
   preventing accidental ABI breakage. Omitted for PyPy and free-threaded builds.
 - **`/std:c11`** (Windows) — MSVC defaults to C89; this flag enables C99/C11
   features used throughout the codebase.
+- **`/GL-` and `/Os`** (Windows) — shrink the C stack frame QuickJS uses per
+  JavaScript call. With setuptools' default `/O2 /GL`, MSVC compiles
+  `JS_CallInternal` with a ~5.2 KB frame (about 736 bytes with GCC/Clang), so a
+  256 KB `set_max_stack_size` only allowed ~50 nested calls and
+  `test_deep_recursion` passed or failed by a single frame depending on where
+  the stack happened to start (it broke on Windows PyPy after an unrelated
+  change to `module.c`). `/GL-` plus `/Os` gives ~3.7 KB (about 70 nested calls
+  at 256 KB), with no measurable slowdown on a recursive benchmark.
+  `test_recursion_depth_margin` guards the margin.
 - **`-static`** (Windows) — static-links the MSVC runtime so the wheel does not
   depend on a specific MSVCRT DLL.
 - **`-Werror=incompatible-pointer-types`** (non-Windows) — catches pointer type

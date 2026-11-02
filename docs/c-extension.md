@@ -313,3 +313,11 @@ struct module_state { int dummy; };
 `module.c` uses C99 features (loop-variable declarations, designated initialisers)
 that MSVC's default C89 mode rejects. Adding `/std:c11` to `extra_compile_args`
 on Windows resolves all these errors.
+
+### MSVC frame size needs `/GL-` and `/Os`
+
+With the default `/O2 /GL`, MSVC gives QuickJS's `JS_CallInternal` a ~5.2 KB C
+stack frame per JavaScript call, so the default 256 KB stack allows only ~50
+nested calls and the stack-limit tests had a one-frame margin. `setup.py` adds
+`/GL-` and `/Os` on Windows to bring this down to ~3.7 KB. See
+[build.md](build.md#compile-flags).

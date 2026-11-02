@@ -43,8 +43,8 @@ repository's default branch, `devel`), manual `workflow_dispatch`, and a
 `workflow_call` with `full: true` use the complete matrix: CPython 3.10–3.15,
 free-threaded 3.13t/3.14t/3.15t, and PyPy 3.10/3.11 on Ubuntu, Windows, and
 macOS (11 interpreters x 3 OSes = 33 jobs), plus CPython 3.15 on native Linux
-aarch64 (34 test jobs). The fast matrix has 7 test jobs. Each run also has the
-`quality` and `select-matrix` jobs: fast = 9 jobs, full = 36 jobs.
+aarch64 (34 test jobs). The fast matrix has 8 test jobs. Each run also has the
+`quality` and `select-matrix` jobs: fast = 10 jobs, full = 36 jobs.
 
 `workflow_call` takes an explicit boolean `full` input (default `false`). In a
 called workflow `github.event_name` is the caller's event, never
@@ -88,6 +88,13 @@ restored until its end of life on 2026-10-31 (classifier, fast/full matrices,
 cibuildwheel `build`); after that date `python-support.yml` reports that 3.10
 can be dropped, and an operator removes it everywhere in one change.
 
+The Windows PyPy 3.11 fast job takes about 2.5 minutes, the same as the slowest
+existing fast job (macOS 3.15), so it does not lengthen the fast lane. It is in
+the fast matrix because Windows PyPy builds use different compile settings than
+CPython (no stable ABI) and a Windows-only stack-frame regression
+([c-extension.md](c-extension.md#msvc-frame-size-needs-gl--and-os)) once
+passed every fast job.
+
 Fast jobs run `pytest -m "not slow"`; the full matrix and wheel tests use no
 marker filter and run every test. See
 [testing.md](testing.md#test-selection-and-local-commands) for what the `slow`
@@ -112,7 +119,7 @@ Python. There is no Docker, no QEMU, no wheel packaging — just compile and run
 pytest directly. The green baseline run `40064370056` spent 6m06s wall time on
 25 jobs (24 test jobs consumed 1,978 runner-seconds; setup was 78–92 seconds
 per job while pytest itself took 2–3 seconds). The push/PR policy now launches
-seven test jobs rather than 24, a 71% reduction in test job setup work; the
+eight test jobs rather than 24, a 67% reduction in test job setup work; the
 weekly/full path preserves the complete coverage. The prior QEMU aarch64 wheel
 job took 35–50 minutes; native `ubuntu-24.04-arm` avoids emulation, with an
 expected 4–6 minute build. The first release run records the hosted timing.
@@ -228,7 +235,7 @@ skip = ["cp*t-*"]
 | Aspect | CI (`main.yml`) | Build wheels (`build.yml`) |
 |--------|-----------------|----------------------------|
 | Trigger | Push/PR (fast); weekly, dispatch, full `workflow_call` (full) | Push to `main`, `workflow_call`/`dispatch` (after the full matrix on the same SHA) |
-| Speed | 7 test jobs on push/PR; complete matrix weekly/manual | 2–10 min (native aarch64; no QEMU) |
+| Speed | 8 test jobs on push/PR; complete matrix weekly/manual | 2–10 min (native aarch64; no QEMU) |
 | What it builds | C extension via `uv pip install -e .` | Binary abi3 wheels via `cibuildwheel` in Docker |
 | Test environment | Native host Python | Exact manylinux/musllinux/Windows wheel environment |
 | Purpose | Fast regression feedback | Validates exact published artifact; handles PyPI publishing |
@@ -308,7 +315,7 @@ gh run watch --repo genotrance/quickjs-ng
 
 ## Operator verification
 
-After this change lands on `devel`, confirm the automatic push/PR run has seven
+After this change lands on `devel`, confirm the automatic push/PR run has eight
 test jobs plus quality and matrix selection:
 
 ```bash
@@ -336,10 +343,10 @@ per test job; Windows and macOS runners are slower), so treat them as estimates.
 
 | Operator run | Jobs | Expected wall time |
 |--------------|------|--------------------|
-| `git push` to `devel` (CI) | 9: `quality`, `select-matrix`, 7 fast tests (Ubuntu 3.10/3.15/3.15t/PyPy 3.11, Windows 3.15, macOS 3.15, ARM 3.15) | 2–4 min |
+| `git push` to `devel` (CI) | 10: `quality`, `select-matrix`, 8 fast tests (Ubuntu 3.10/3.15/3.15t/PyPy 3.11, Windows 3.15/PyPy 3.11, macOS 3.15, ARM 3.15) | 2–4 min |
 | `gh workflow run CI --repo genotrance/quickjs-ng --ref devel` | 36: `quality`, `select-matrix`, 34 full tests (33 + ARM 3.15); title `Test (full)` | 5–10 min |
 | `gh workflow run "Build wheels" --repo genotrance/quickjs-ng --ref devel -f sha=<devel sha>` | about 45: `setup`, `full-ci` (36 nested), `build-sdist`, 6 `build-wheels`, `publish` | 25–45 min (full CI 5–10 min, then wheels in parallel with native aarch64 at 10–20 min) |
-| `@dependabot rebase` on PR #18 | 9 (fast matrix, as for any PR) | 2–4 min |
+| `@dependabot rebase` on PR #18 | 10 (fast matrix, as for any PR) | 2–4 min |
 
 The 0.17.0.2 dispatch is safe: `publish` finds the version on PyPI, skips the
 upload and the tag, and the only effect is the gate plus a wheel build. A push
