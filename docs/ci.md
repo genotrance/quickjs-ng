@@ -210,6 +210,9 @@ Re-running the workflow for the same commit is safe.
 
 `macos-13` (Intel x86_64) is excluded — that runner image is deprecated.
 
+The i686 container is created with explicit public DNS servers (`--dns`) because
+the PyPy interpreter download inside it intermittently failed name resolution.
+
 The `manylinux_2_28` image is required for i686 and aarch64 because the older
 `manylinux2014` image ships GCC 4.8, which rejects the C99 construct
 `case X: { int y; … }` (declaration after a label) used in `cutils.h`.
