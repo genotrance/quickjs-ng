@@ -7,14 +7,17 @@ Writes drift=true/false and a markdown body to GITHUB_OUTPUT / GITHUB_STEP_SUMMA
 import os
 import re
 import sys
-import tomllib
 from pathlib import Path
 
-key = lambda v: tuple(map(int, v.split(".")))  # noqa: E731
+import tomllib
+
+key = lambda v: tuple(map(int, v.split(".")))
 ids = Path(sys.argv[1]).read_text().split()
 project = tomllib.loads(Path("pyproject.toml").read_text())
 
-listed = set(re.findall(r"Programming Language :: Python :: (3\.\d+)$", "\n".join(project["project"]["classifiers"]), re.M))
+listed = set(
+    re.findall(r"Programming Language :: Python :: (3\.\d+)$", "\n".join(project["project"]["classifiers"]), re.M)
+)
 minimum = re.search(r">=\s*(3\.\d+)", project["project"]["requires-python"]).group(1)
 buildable = {f"3.{m}" for m in re.findall(r"^cp3(\d+)-", "\n".join(ids), re.M)}
 buildable_tags = {i.split("-")[0] for i in ids}
@@ -29,13 +32,19 @@ lost_variants = sorted(shipped - buildable_tags)
 
 lines = []
 if add:
-    lines.append(f"The pinned cibuildwheel can build CPython {', '.join(add)}, which the classifiers do not list. Add the classifier, CI matrix entries, docs and wheel builds as applicable.")
+    lines.append(
+        f"The pinned cibuildwheel can build CPython {', '.join(add)}, which the classifiers do not list. Add the classifier, CI matrix entries, docs and wheel builds as applicable."
+    )
 if lost:
-    lines.append(f"The pinned cibuildwheel no longer builds listed CPython {', '.join(lost)}. Decide whether to drop it, or pin a cibuildwheel that still builds it.")
+    lines.append(
+        f"The pinned cibuildwheel no longer builds listed CPython {', '.join(lost)}. Decide whether to drop it, or pin a cibuildwheel that still builds it."
+    )
 if lost_variants:
     lines.append(f"The pinned cibuildwheel no longer builds shipped variant(s) {', '.join(lost_variants)}.")
 
-print(f"classifiers: {sorted(listed, key=key)}; cibuildwheel CPython: {sorted(buildable, key=key)}; shipped variants: {sorted(shipped)}")
+print(
+    f"classifiers: {sorted(listed, key=key)}; cibuildwheel CPython: {sorted(buildable, key=key)}; shipped variants: {sorted(shipped)}"
+)
 print("\n".join(lines) or "No drift.")
 if out := os.environ.get("GITHUB_OUTPUT"):
     with open(out, "a") as f:
