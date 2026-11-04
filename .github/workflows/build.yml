@@ -154,7 +154,7 @@ jobs:
             arch: i686
             cibw_archs: i686
             cibw_manylinux_image: manylinux_2_28
-            cibw_container_engine: "docker; create_args: --dns 8.8.8.8 --dns 1.1.1.1"
+            cibw_container_engine: "docker; create_args: --network host --security-opt seccomp=unconfined"
           - os: ubuntu-24.04-arm
             arch: aarch64
             cibw_archs: aarch64
@@ -174,6 +174,34 @@ jobs:
         with:
           ref: ${{ needs.setup.outputs.sha }}
           submodules: recursive
+
+      - name: Diagnose i686 container networking
+        if: matrix.arch == 'i686' && matrix.os == 'ubuntu-latest'
+        continue-on-error: true
+        run: |
+          uname -a
+          docker version
+          i686_image=quay.io/pypa/manylinux_2_28_i686
+          x86_64_image=quay.io/pypa/manylinux_2_28_x86_64
+          docker pull --platform=linux/386 "$i686_image"
+          docker pull "$x86_64_image"
+
+          probe() {
+            local label=$1; shift
+            local platform=$1; shift
+            local image=$1; shift
+            echo "--- $label ($image, $platform, extra args: $* ) ---"
+            timeout 20 docker run --rm --platform="$platform" "$@" "$image" \
+              sh -c 'getent ahosts downloads.python.org; curl -sSI --max-time 10 https://downloads.python.org/pypy/' || echo "probe failed (exit $?)"
+          }
+
+          probe "i686 default"                 linux/386 "$i686_image"
+          probe "i686 --dns"                    linux/386 "$i686_image" --dns 8.8.8.8 --dns 1.1.1.1
+          probe "i686 --network host"           linux/386 "$i686_image" --network host
+          probe "i686 --security-opt unconfined" linux/386 "$i686_image" --security-opt seccomp=unconfined
+          probe "i686 host+unconfined"          linux/386 "$i686_image" --network host --security-opt seccomp=unconfined
+
+          probe "x86_64 default"               linux/amd64 "$x86_64_image"
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v4.3.5

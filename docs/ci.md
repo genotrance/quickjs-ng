@@ -210,8 +210,11 @@ Re-running the workflow for the same commit is safe.
 
 `macos-13` (Intel x86_64) is excluded — that runner image is deprecated.
 
-The i686 container is created with explicit public DNS servers (`--dns`) because
-the PyPy interpreter download inside it intermittently failed name resolution.
+The i686 container is created with `--network host --security-opt seccomp=unconfined`
+because the default bridged network and seccomp profile broke DNS resolution for
+the PyPy interpreter download inside the 32-bit container on GitHub's `ubuntu-latest`
+runners (native-arch containers were unaffected); a non-fatal diagnostic step probes
+several network/seccomp variants beforehand to help narrow down future regressions.
 
 The `manylinux_2_28` image is required for i686 and aarch64 because the older
 `manylinux2014` image ships GCC 4.8, which rejects the C99 construct
