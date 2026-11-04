@@ -16,6 +16,11 @@ on:
         required: false
         type: string
         default: ""
+      dry_run:
+        description: "Build all wheels but skip the publish job (no PyPI upload, no tag)"
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       sha:
@@ -28,6 +33,11 @@ on:
         required: false
         type: string
         default: ""
+      dry_run:
+        description: "Build all wheels but skip the publish job (no PyPI upload, no tag)"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   setup:
@@ -176,9 +186,31 @@ jobs:
           name: wheels-${{ matrix.os }}-${{ matrix.arch }}
           path: wheelhouse/*.whl
 
+  dry-run-summary:
+    needs: [setup, full-ci, build-sdist, build-wheels]
+    if: inputs.dry_run == true && needs.setup.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List built distributions
+        run: |
+          {
+            echo "### Dry run: built distributions (not published)"
+            echo
+            echo "| File |"
+            echo "| --- |"
+            for f in dist/*; do
+              echo "| $(basename "$f") |"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
   publish:
     needs: [setup, full-ci, build-sdist, build-wheels]
-    if: needs.setup.outputs.publish == 'true' && needs.setup.outputs.build == 'true'
+    if: inputs.dry_run != true && needs.setup.outputs.publish == 'true' && needs.setup.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
