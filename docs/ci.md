@@ -9,7 +9,7 @@ Five workflows live under `.github/workflows/`:
 | File | Trigger | Purpose |
 |------|---------|---------|
 | `main.yml` | Push/PR, weekly schedule, dispatch, reusable call | Fast or complete regression coverage (pytest) |
-| `build.yml` | Push to `main`, `workflow_call`, `workflow_dispatch` | Run the full CI matrix on the exact commit, then build abi3 wheels + sdist, publish to PyPI, tag |
+| `build.yml` | Push to `main`, `workflow_call`, `workflow_dispatch` (`dry_run` input) | Run the full CI matrix on the exact commit, then build abi3 wheels + sdist, publish to PyPI, tag (`dry_run: true` builds and uploads artifacts but skips publish) |
 | `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` (`dry_run` input) | Detect a new upstream tag, commit to `main`, dispatch the (self-gated) wheel build, then call `back-merge.yml` once that build really publishes |
 | `back-merge.yml` | `workflow_call`, `workflow_dispatch` (`dry_run` input) | Merge `main` into `devel` after a release, or open a conflict pull request |
 | `python-support.yml` | Monthly cron (1st of month, 07:00 UTC), `workflow_dispatch` | Open an issue when the official CPython support window differs from package classifiers |
@@ -147,8 +147,8 @@ expected 4–6 minute build. The first release run records the hosted timing.
 | Event | Commit built | Inputs |
 |-------|--------------|--------|
 | Push to `main` | The pushed commit | none |
-| `workflow_call` | `sha` input (default: triggering commit) | `sha`, `version` (both optional) |
-| `workflow_dispatch` | `sha` input (default: head of the selected ref) | `sha`, `version` (both optional) |
+| `workflow_call` | `sha` input (default: triggering commit) | `sha`, `version`, `dry_run` (all optional, `dry_run` default `false`) |
+| `workflow_dispatch` | `sha` input (default: head of the selected ref) | `sha`, `version`, `dry_run` (all optional, `dry_run` default `false`) |
 
 `check-upstream.yml` commits the upstream update to `main`, then uses
 `actions/github-script` to dispatch `build.yml` (`workflow_dispatch`) for that
@@ -171,7 +171,12 @@ Outputs: `sha`, `upstream_tag`, `version`, `publish`, `build`.
 oldest and newest supported CPython, and builds/tests the two shipped PyPy
 wheels. The duplicate abi3 compatibility test does not add a shipped wheel.
 
-**`publish`** — Downloads all artifacts and, in order:
+**`dry-run-summary`** — Only when `dry_run: true`. Downloads all artifacts and
+lists the built distributions in the run's step summary. `publish` does not
+run in this case.
+
+**`publish`** — Skipped entirely when `dry_run: true` (job-level `if`).
+Otherwise downloads all artifacts and, in order:
 1. Fails if the version differs from `pyproject.toml` at the commit (or from
    the `version` input), or if any built file has a different version.
 2. Queries PyPI; if the version already exists the upload and tagging are
@@ -408,6 +413,20 @@ gh workflow run CI --repo genotrance/quickjs-ng --ref devel
 gh run list --repo genotrance/quickjs-ng --workflow main.yml --branch devel --limit 1
 gh run watch --repo genotrance/quickjs-ng
 ```
+
+To also dry-run the wheel build itself (all platforms, uploaded as artifacts,
+no PyPI upload and no tag), dispatch `build.yml` with `dry_run=true`:
+
+```bash
+gh workflow run build.yml --repo genotrance/quickjs-ng --ref devel -f dry_run=true -f sha=<sha>
+gh run list --repo genotrance/quickjs-ng --workflow build.yml --branch devel --limit 1
+gh run watch --repo genotrance/quickjs-ng
+```
+
+`setup`, `full-ci`, `build-sdist` and `build-wheels` all run exactly as in a
+real release; only the `publish` job is skipped (job-level `if`), and a
+`dry-run-summary` job lists the built distributions in the run's step summary
+instead.
 
 The scheduled full run needs no dispatch. During an upstream release,
 `check-upstream.yml` dispatches `build.yml`, which runs the full matrix itself
