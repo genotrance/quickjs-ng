@@ -154,6 +154,7 @@ jobs:
             arch: i686
             cibw_archs: i686
             cibw_manylinux_image: manylinux_2_28
+            cibw_container_engine: "docker; create_args: --dns 8.8.8.8 --dns 1.1.1.1"
           - os: ubuntu-24.04-arm
             arch: aarch64
             cibw_archs: aarch64
@@ -178,6 +179,7 @@ jobs:
         uses: pypa/cibuildwheel@v4.3.5
         env:
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
+          CIBW_CONTAINER_ENGINE: ${{ matrix.cibw_container_engine || 'docker' }}
           CIBW_MANYLINUX_I686_IMAGE: ${{ matrix.cibw_manylinux_image && format('quay.io/pypa/{0}_i686', matrix.cibw_manylinux_image) || '' }}
           CIBW_MANYLINUX_AARCH64_IMAGE: ${{ matrix.cibw_manylinux_image && format('quay.io/pypa/{0}_aarch64', matrix.cibw_manylinux_image) || '' }}
 
