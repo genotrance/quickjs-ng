@@ -2,7 +2,7 @@ name: Check Python support window
 
 on:
   schedule:
-    # Check the official support window monthly from the default (devel) branch.
+    # Compare classifiers with the pinned cibuildwheel monthly from the default (devel) branch.
     - cron: "0 7 1 * *"
   workflow_dispatch:
 
@@ -16,60 +16,36 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Compare classifiers with the official support window
-        id: support
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install the cibuildwheel version pinned in build.yml
         run: |
-          python3 - <<'PY'
-          import html
-          import os
-          import re
-          from pathlib import Path
-          from urllib.request import Request, urlopen
+          VERSION=$(sed -nE 's#.*pypa/cibuildwheel@v([0-9][0-9.]*).*#\1#p' .github/workflows/build.yml | head -n1)
+          test -n "$VERSION"
+          echo "Pinned cibuildwheel: $VERSION"
+          python -m pip install "cibuildwheel==$VERSION"
 
-          project = Path("pyproject.toml").read_text()
-          current = set(re.findall(r"Programming Language :: Python :: (3\.\d+)", project))
+      - name: Compare classifiers with what cibuildwheel builds
+        id: support
+        env:
+          CIBW_BUILD: "*"
+          CIBW_ENABLE: cpython-prerelease pypy pypy-eol
+          CIBW_PLATFORM: linux
+        run: |
+          cibuildwheel --print-build-identifiers > ids.txt
+          python .github/scripts/check_python_support.py ids.txt
 
-          request = Request(
-              "https://devguide.python.org/versions/",
-              headers={"User-Agent": "quickjs-ng-python-support-check"},
-          )
-          with urlopen(request, timeout=20) as response:
-              page = response.read().decode()
-
-          expected = set()
-          for row in re.findall(r"<tr.*?</tr>", page, flags=re.DOTALL):
-              cells = [
-                  html.unescape(re.sub(r"<[^>]+>", "", cell)).strip().lower()
-                  for cell in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.DOTALL)
-              ]
-              if cells and re.fullmatch(r"3\.\d+", cells[0]) and any(
-                  status in {"bugfix", "security"} for status in cells[1:]
-              ):
-                  expected.add(cells[0])
-
-          if not expected:
-              raise SystemExit("Could not parse supported CPython versions from devguide.python.org")
-
-          output = Path(os.environ["GITHUB_OUTPUT"])
-          with output.open("a") as file:
-              file.write(f"current={','.join(sorted(current, key=lambda v: tuple(map(int, v.split('.')))))}\n")
-              file.write(f"expected={','.join(sorted(expected, key=lambda v: tuple(map(int, v.split('.')))))}\n")
-              file.write(f"drift={'true' if current != expected else 'false'}\n")
-          PY
-
-      - name: Open a support-drift issue
+      - name: Open or update a support-drift issue
         if: steps.support.outputs.drift == 'true'
         env:
-          CURRENT: ${{ steps.support.outputs.current }}
-          EXPECTED: ${{ steps.support.outputs.expected }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          TITLE="Python support window drift: ${EXPECTED}"
-          vkey() { printf '%s\n' "$1" | tr ',' '\n' | sed '/^$/d' | sort -V; }
-          DROP=$(comm -23 <(vkey "$CURRENT" | sort) <(vkey "$EXPECTED" | sort) | sort -V | paste -sd, -)
-          ADD=$(comm -13 <(vkey "$CURRENT" | sort) <(vkey "$EXPECTED" | sort) | sort -V | paste -sd, -)
-          if [ "$(gh issue list --state open --search "$TITLE in:title" --json number --jq 'length')" = 0 ]; then
-            gh issue create \
-              --title "$TITLE" \
-              --body "The monthly check found classifiers [$CURRENT], while devguide.python.org lists supported CPython versions [$EXPECTED]. Can be dropped (end of life): [${DROP:-none}]. To add: [${ADD:-none}]. Update classifiers, CI matrices, docs, and wheels as applicable."
+          TITLE="Python support drift against pinned cibuildwheel"
+          NUMBER=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$NUMBER" ]; then
+            gh issue edit "$NUMBER" --body-file support-drift-body.md
+          else
+            gh issue create --title "$TITLE" --body-file support-drift-body.md
           fi

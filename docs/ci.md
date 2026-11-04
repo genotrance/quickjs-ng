@@ -12,7 +12,7 @@ Five workflows live under `.github/workflows/`:
 | `build.yml` | Push to `main`, `workflow_call`, `workflow_dispatch` (`dry_run` input) | Run the full CI matrix on the exact commit, then build abi3 wheels + sdist, publish to PyPI, tag (`dry_run: true` builds and uploads artifacts but skips publish) |
 | `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` (`dry_run` input) | Detect a new upstream tag, commit to `main`, dispatch the (self-gated) wheel build, then call `back-merge.yml` once that build really publishes |
 | `back-merge.yml` | `workflow_call`, `workflow_dispatch` (`dry_run` input) | Merge `main` into `devel` after a release, or open a conflict pull request |
-| `python-support.yml` | Monthly cron (1st of month, 07:00 UTC), `workflow_dispatch` | Open an issue when the official CPython support window differs from package classifiers |
+| `python-support.yml` | Monthly cron (1st of month, 07:00 UTC), `workflow_dispatch` | Open or update one issue when the pinned cibuildwheel builds a CPython the classifiers lack, or no longer builds a listed one |
 
 `check-upstream.yml`'s `schedule` trigger only runs from the repository's
 default branch, so the workflow *file* lives on `devel`, even though the
@@ -85,15 +85,19 @@ procedure, not a gate. Skipping it cannot let a broken build publish, because
 on `main` instead of being caught on `devel` first.
 
 The package's supported CPython window is tracked by classifiers and
-`python-support.yml`. That workflow parses the official
-[`devguide.python.org/versions`](https://devguide.python.org/versions/) table
-monthly and opens one issue if the supported bugfix/security versions drift.
-An operator updates the classifiers, CI table, wheel policy, and docs together.
-`requires-python >=3.10` remains to preserve the shipped PyPy 3.10 wheel;
-CPython support itself follows the classifier window. CPython 3.10 is
-restored until its end of life on 2026-10-31 (classifier, fast/full matrices,
-cibuildwheel `build`); after that date `python-support.yml` reports that 3.10
-can be dropped, and an operator removes it everywhere in one change.
+`python-support.yml`. A CPython is added as soon as it is released and
+buildable; one is dropped only when cibuildwheel stops building it or a crucial
+dependency drops it (end of life alone is not a reason). The workflow reads the
+cibuildwheel version pinned in `build.yml`, installs it, lists its build
+identifiers on Linux (`cibuildwheel --print-build-identifiers`, with the
+`cpython-prerelease`, `pypy` and `pypy-eol` groups) and compares them with the
+classifiers and the shipped PyPy/free-threaded selectors in `pyproject.toml`
+(`.github/scripts/check_python_support.py`). It opens one issue, or updates the
+open one, only when cibuildwheel can build a CPython the classifiers do not
+list, or no longer builds a listed CPython or shipped variant; otherwise it does
+nothing. An operator updates the classifiers, CI table, wheel policy, and docs
+together. `requires-python >=3.10` remains to preserve the shipped PyPy 3.10
+wheel. CPython 3.10 stays while cibuildwheel builds it.
 
 The Windows PyPy 3.11 fast job takes about 2.5 minutes, the same as the slowest
 existing fast job (macOS 3.15), so it does not lengthen the fast lane. It is in
