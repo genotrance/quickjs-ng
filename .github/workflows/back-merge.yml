@@ -1,0 +1,102 @@
+name: Back-merge main into devel
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "Report the merge outcome without pushing devel or opening a PR"
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report the merge outcome without pushing devel or opening a PR"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: back-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: devel
+          fetch-depth: 0
+
+      - name: Fetch main
+        run: git fetch origin main:refs/remotes/origin/main
+
+      - name: Merge main into devel
+        id: merge
+        env:
+          DRY_RUN: ${{ inputs.dry_run == true }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          MAIN_SHA=$(git rev-parse origin/main)
+          echo "main_sha=$MAIN_SHA" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "origin/main ($MAIN_SHA) is already an ancestor of devel; nothing to do"
+            echo "outcome=nothing" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git merge --no-ff origin/main -m "Merge main into devel"; then
+            echo "outcome=clean" >> "$GITHUB_OUTPUT"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "Dry run: would push devel at $(git rev-parse HEAD) (merging main $MAIN_SHA)"
+            else
+              git push origin HEAD:devel
+            fi
+          else
+            git merge --abort
+            echo "outcome=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report or open a pull request for a conflicting merge
+        if: steps.merge.outputs.outcome == 'conflict'
+        env:
+          DRY_RUN: ${{ inputs.dry_run == true }}
+          MAIN_SHA: ${{ steps.merge.outputs.main_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHORT_SHA=$(git rev-parse --short "$MAIN_SHA")
+          BRANCH="backmerge/main-$SHORT_SHA"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run: merging origin/main ($MAIN_SHA) into devel conflicts; would push $BRANCH and open a pull request against devel"
+            exit 0
+          fi
+
+          git push origin "$MAIN_SHA:refs/heads/$BRANCH"
+
+          if [ "$(gh pr list --repo "$GITHUB_REPOSITORY" --base devel --head "$BRANCH" --state open --json number --jq 'length')" = 0 ]; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base devel --head "$BRANCH" \
+              --title "Back-merge main into devel ($SHORT_SHA)" \
+              --body "Automatic back-merge of main into devel conflicted after a release and needs manual resolution."
+          else
+            echo "An open pull request already targets devel from $BRANCH; not opening another"
+          fi
+
+          gh workflow run main.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+
+          echo "::error::Back-merge of main into devel conflicted; resolve the pull request from $BRANCH"
+          exit 1
+
+      - name: Trigger CI on devel
+        if: steps.merge.outputs.outcome == 'clean' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run main.yml --repo "$GITHUB_REPOSITORY" --ref devel

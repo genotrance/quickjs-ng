@@ -2,6 +2,8 @@
 
 import concurrent.futures
 import json
+import subprocess
+import sys
 import threading
 import unittest
 
@@ -63,6 +65,32 @@ class FunctionThreads(unittest.TestCase):
         expected = sum(data)
         for future in concurrent.futures.as_completed(futures):
             self.assertEqual(future.result(), expected)
+
+
+class LazyExecutor(unittest.TestCase):
+    """The worker executor must be created lazily, not at import time.
+
+    A non-daemon ThreadPoolExecutor thread created at import deadlocks
+    interpreter shutdown under gevent (the concurrent.futures atexit join never
+    completes in gevent's hub). Importing quickjs and using Context must spawn no
+    worker thread; only creating a Function does.
+    """
+
+    def _worker_thread_count(self, snippet):
+        code = (
+            "import threading, quickjs\n"
+            + snippet
+            + "\nprint(sum('quickjs-worker' in t.name for t in threading.enumerate()))\n"
+        )
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)  # noqa: S603
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return int(out.stdout.strip().splitlines()[-1])
+
+    def test_import_and_context_spawn_no_worker(self):
+        self.assertEqual(self._worker_thread_count("quickjs.Context().eval('1 + 1')"), 0)
+
+    def test_function_creates_worker(self):
+        self.assertGreaterEqual(self._worker_thread_count("quickjs.Function('f', 'function f(){ return 1; }')"), 1)
 
 
 class ContextPerThread(unittest.TestCase):
@@ -224,3 +252,58 @@ class ContextPerThread(unittest.TestCase):
             self.assertEqual(ctx.eval("result"), 42)
 
         self._run_in_threads(work)
+
+
+class ExecutorCreationRaces(unittest.TestCase):
+    def _run_concurrently(self, fns):
+        barrier = threading.Barrier(len(fns))
+        results = [None] * len(fns)
+
+        def run(i, fn):
+            barrier.wait()
+            results[i] = fn()
+
+        threads = [threading.Thread(target=run, args=(i, f)) for i, f in enumerate(fns)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        return results
+
+    def test_concurrent_first_creation_single_shared_executor(self):
+        code = (
+            "import threading, quickjs\n"
+            "b = threading.Barrier(8)\n"
+            "fs = []\n"
+            "def mk():\n"
+            "    b.wait(); fs.append(quickjs.Function('f', 'function f(){return 1}'))\n"
+            "ts = [threading.Thread(target=mk) for _ in range(8)]\n"
+            "[t.start() for t in ts]; [t.join() for t in ts]\n"
+            "assert len({id(f._threadpool) for f in fs}) == 1\n"
+            "assert quickjs._executor_count == 1, quickjs._executor_count\n"
+        )
+        subprocess.run([sys.executable, "-c", code], check=True)  # noqa: S603
+
+    def test_concurrent_shared_and_own_keep_stack_size(self):
+        code = (
+            "import threading, quickjs\n"
+            "before = threading.stack_size()\n"
+            "b = threading.Barrier(8)\n"
+            "fs = []\n"
+            "def mk(own):\n"
+            "    b.wait(); fs.append(quickjs.Function('f', 'function f(){return 1}', own_executor=own))\n"
+            "ts = [threading.Thread(target=mk, args=(i % 2 == 0,)) for i in range(8)]\n"
+            "[t.start() for t in ts]; [t.join() for t in ts]\n"
+            "assert threading.stack_size() == before\n"
+            "assert all(len(f._threadpool._threads) == 1 for f in fs)\n"
+            "assert all(f() == 1 for f in fs)\n"
+        )
+        subprocess.run([sys.executable, "-c", code], check=True)  # noqa: S603
+
+    def test_no_worker_after_import_or_context(self):
+        code = (
+            "import threading, quickjs\n"
+            "quickjs.Context().eval('1+1')\n"
+            "assert threading.active_count() == 1, threading.enumerate()\n"
+        )
+        subprocess.run([sys.executable, "-c", code], check=True)  # noqa: S603

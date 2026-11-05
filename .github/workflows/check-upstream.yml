@@ -5,6 +5,12 @@ on:
     # Check monthly on the 1st at 06:00 UTC
     - cron: "0 6 1 * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run every check and the back-merge preview without pushing to main or dispatching build.yml"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: check-upstream
@@ -14,8 +20,12 @@ jobs:
   check:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
       contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+      version: ${{ steps.commit.outputs.version }}
+      release_needed: ${{ steps.check.outputs.needed }}
+      dry_run: ${{ inputs.dry_run == true }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -73,6 +83,7 @@ jobs:
         env:
           TAG: ${{ steps.upstream.outputs.tag }}
           UPSTREAM: ${{ steps.upstream.outputs.version }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
         run: |
           git -C upstream-quickjs fetch --tags origin
           git -C upstream-quickjs checkout --detach "$TAG"
@@ -90,25 +101,42 @@ jobs:
           sed -i "/^name = \"quickjs-ng\"\$/{n;s/^version = .*/version = \"$VERSION\"/}" uv.lock
 
           git add upstream-quickjs pyproject.toml uv.lock
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           if git diff --cached --quiet; then
             echo "main already contains $TAG and version $VERSION"
+          elif [ "$DRY_RUN" = "true" ]; then
+            git commit -m "Update upstream quickjs-ng to $TAG (version $VERSION)"
+            echo "Dry run: would push the following commit to main:"
+            git show --stat HEAD
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
             git commit -m "Update upstream quickjs-ng to $TAG (version $VERSION)"
             git push origin HEAD:main
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Trigger build at the committed SHA
-        if: steps.check.outputs.needed == 'true'
-        uses: actions/github-script@v8
+  trigger-build:
+    needs: check
+    if: needs.check.outputs.release_needed == 'true' && needs.check.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    outputs:
+      dispatched_at: ${{ steps.dispatch.outputs.dispatched_at }}
+    steps:
+      - name: Trigger the gated build at the committed SHA
+        id: dispatch
+        uses: actions/github-script@v9
         env:
-          BUILD_SHA: ${{ steps.commit.outputs.sha }}
-          BUILD_VERSION: ${{ steps.commit.outputs.version }}
+          BUILD_SHA: ${{ needs.check.outputs.sha }}
+          BUILD_VERSION: ${{ needs.check.outputs.version }}
         with:
           script: |
+            // createWorkflowDispatch does not return a run id, so wait-for-build
+            // finds the run itself: build.yml, workflow_dispatch, this head sha,
+            // created at or after this timestamp.
+            const dispatchedAt = new Date().toISOString();
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -119,3 +147,89 @@ jobs:
                 version: process.env.BUILD_VERSION
               }
             });
+            core.setOutput('dispatched_at', dispatchedAt);
+
+  wait-for-build:
+    needs: [check, trigger-build]
+    if: needs.check.outputs.release_needed == 'true' && needs.check.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      actions: read
+    outputs:
+      published: ${{ steps.wait.outputs.published }}
+      run_id: ${{ steps.wait.outputs.run_id }}
+    steps:
+      - name: Wait for the dispatched build.yml run and read its publish result
+        id: wait
+        uses: actions/github-script@v9
+        env:
+          BUILD_SHA: ${{ needs.check.outputs.sha }}
+          DISPATCHED_AT: ${{ needs.trigger-build.outputs.dispatched_at }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sha = process.env.BUILD_SHA;
+            const since = new Date(process.env.DISPATCHED_AT);
+
+            async function findRun() {
+              for (let page = 1; page <= 5; page++) {
+                const { data } = await github.rest.actions.listWorkflowRuns({
+                  owner, repo, workflow_id: 'build.yml', event: 'workflow_dispatch',
+                  per_page: 30, page
+                });
+                const match = data.workflow_runs.find(
+                  r => r.head_sha === sha && new Date(r.created_at) >= since
+                );
+                if (match) return match;
+                if (data.workflow_runs.length < 30) break;
+              }
+              return null;
+            }
+
+            let run = null;
+            while (!run) {
+              run = await findRun();
+              if (!run) await new Promise(r => setTimeout(r, 15000));
+            }
+            core.info(`Found build.yml run ${run.html_url}`);
+
+            while (run.status !== 'completed') {
+              await new Promise(r => setTimeout(r, 60000));
+              ({ data: run } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: run.id }));
+            }
+
+            const { data: jobsData } = await github.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: run.id });
+            const publishJob = jobsData.jobs.find(j => j.name === 'publish');
+            const publishStep = publishJob && publishJob.steps.find(s => s.name === 'Publish to PyPI');
+            const published = !!(publishJob && publishJob.conclusion === 'success' &&
+                                  publishStep && publishStep.conclusion === 'success');
+
+            core.info(`build.yml run ${run.id} conclusion=${run.conclusion}, ` +
+                      `publish job=${publishJob ? publishJob.conclusion : 'missing'}, ` +
+                      `publish step=${publishStep ? publishStep.conclusion : 'missing'}`);
+            core.setOutput('run_id', String(run.id));
+            core.setOutput('published', String(published));
+
+  back-merge:
+    needs: wait-for-build
+    if: needs.wait-for-build.outputs.published == 'true'
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    uses: ./.github/workflows/back-merge.yml
+    with:
+      dry_run: false
+
+  back-merge-dry-run:
+    needs: check
+    if: needs.check.outputs.dry_run == 'true'
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    uses: ./.github/workflows/back-merge.yml
+    with:
+      dry_run: true

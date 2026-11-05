@@ -713,3 +713,40 @@ class ObjectMethods(unittest.TestCase):
         """)
         )
         self.assertEqual(result, {"a": 1, "b": 2, "c": 3})
+
+
+class StringAndBigIntRepresentations(unittest.TestCase):
+    """Rope strings (large concatenations) and short/heap BigInts convert to Python."""
+
+    def setUp(self):
+        self.ctx = quickjs.Context()
+
+    def test_long_concatenated_strings(self):
+        for n in (100, 8000, 8192, 8193, 20000, 100000):
+            s = self.ctx.eval(f"'a'.repeat({n // 2}) + 'b'.repeat({n - n // 2})")
+            self.assertEqual(s, "a" * (n // 2) + "b" * (n - n // 2))
+
+    def test_rope_via_loop(self):
+        s = self.ctx.eval("var s = ''; for (var i = 0; i < 5000; i++) s += 'xyz'; s")
+        self.assertEqual(s, "xyz" * 5000)
+
+    def test_strings_from_function_and_object(self):
+        f = self.ctx.eval("(function(n) { var s = ''; for (var i = 0; i < n; i++) s += 'abc'; return s; })")
+        self.assertEqual(f(10000), "abc" * 10000)
+        o = self.ctx.eval("var o = {}; for (var i = 0; i < 10000; i++) o.v = (o.v || '') + 'abc'; o")
+        self.assertEqual(o.json(), json.dumps({"v": "abc" * 10000}, separators=(",", ":")))
+
+    def test_bigints(self):
+        self.assertEqual(self.ctx.eval("1n"), 1)
+        self.assertEqual(self.ctx.eval("-5n"), -5)
+        self.assertEqual(self.ctx.eval("2n ** 62n"), 2**62)
+        self.assertEqual(self.ctx.eval("-(2n ** 100n)"), -(2**100))
+        self.assertEqual(self.ctx.eval("2n ** 1000n"), 2**1000)
+
+    def test_bigint_function_roundtrip(self):
+        big = self.ctx.eval("(function(s) { return BigInt(s); })")
+        for v in (1, -7, 2**40, -(2**70), 2**100):
+            self.assertEqual(big(str(v)), v)
+        g = self.ctx.eval("(function(n) { return BigInt(n) + 1n; })")
+        self.assertEqual(g(1), 2)
+        self.assertEqual(self.ctx.eval("(function() { return 1n; })")(), 1)

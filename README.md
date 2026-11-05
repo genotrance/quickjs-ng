@@ -13,7 +13,7 @@ Drop-in replacement for the archived [quickjs](https://github.com/PetterS/quickj
 pip install quickjs-ng
 ```
 
-Requires Python ≥ 3.10. Pre-built wheels are available for Linux (x86_64, i686, aarch64), Windows (AMD64, x86), and macOS (arm64), for CPython 3.10+ and PyPy 3.10/3.11.
+Requires CPython 3.10+ (3.10 is supported until its end of life on 2026-10-31) or PyPy 3.10/3.11. Pre-built wheels are available for Linux (x86_64, i686, aarch64), Windows (AMD64, x86), and macOS (arm64).
 
 ## Usage
 
@@ -75,13 +75,13 @@ Each `Context` owns an isolated QuickJS runtime — there is no shared state bet
 | `Function` helper | ✅ | Small (executor dispatch) |
 | Shared `Context` | ❌ | — |
 
-**Free-threaded Python (3.13t / 3.14t):** Both patterns remain safe. The GIL was never relied upon for thread-safety.
+**Free-threaded Python (3.13t / 3.14t / 3.15t):** Both patterns remain safe. The GIL was never relied upon for thread-safety.
 
 **musl / Alpine:** Worker threads are automatically created with an 8 MB stack (matching glibc defaults) so `set_max_stack_size` and deep recursion work correctly on musl-based systems.
 
 ## Versioning
 
-Version format is `X.Y.Z.P` where `X.Y.Z` matches the upstream quickjs-ng tag and `P` is the wrapper patch (starts at 1 per upstream release). When a new upstream tag is detected, the submodule and version bump are committed to `main` and wheels are built and published from exactly that commit.
+Version format is `X.Y.Z.P` where `X.Y.Z` matches the upstream quickjs-ng tag and `P` is the wrapper patch (starts at 1 per upstream release). Development, Dependabot updates, and fixes target `devel`. A release bumps the wrapper version on `devel`, then merges `devel` into `main`, where wheels are built and published from exactly that commit. The monthly upstream check commits to `main` and dispatches that build; once it really publishes, `main` is merged back into `devel` automatically (a conflict opens a pull request against `devel` instead). See [docs/ci.md](docs/ci.md#back-merge-back-mergeyml).
 
 ## Development
 
@@ -109,9 +109,14 @@ Bug reports and pull requests are welcome at <https://github.com/genotrance/quic
 
 1. Fork and clone with `--recurse-submodules`.
 2. Run `make install` to set up the venv, build the C extension, and install pre-commit hooks.
-3. Create a feature branch, make changes, add tests in `tests/`.
+3. Create a feature branch from `devel`, make changes, add tests in `tests/`.
 4. Run `make check && make test` — all checks must pass.
-5. Open a pull request. CI runs on Ubuntu, Windows, and macOS across Python 3.10–3.14 (including free-threaded 3.13t/3.14t) and PyPy 3.10/3.11.
+5. Open a pull request to `devel`. Fast CI covers representative oldest/newest CPython, free-threaded, PyPy, Windows, macOS, and native Linux ARM paths; weekly, manual, and release runs (every publish path is gated on the full matrix for the exact commit) cover CPython 3.10–3.15 (including 3.13t/3.14t/3.15t) and PyPy 3.10/3.11 across all three desktop OSes.
+
+Dependabot updates and fixes also target `devel`. For a release, bump the
+wrapper version there and merge `devel` into `main`. The automatic upstream
+release merges `main` back into `devel` itself once it publishes; a conflict
+opens a pull request against `devel` instead of merging silently.
 
 ## Documentation
 
@@ -137,3 +142,9 @@ The porting to quickjs-ng, the stable ABI migration, the expanded test suite, CI
 ## License
 
 MIT
+
+## Fork safety
+
+Create `quickjs.Function` objects (and `own_executor=True` executors) after
+`fork()`. A child forked after first use inherits a dead worker thread and
+hangs; `spawn`/`forkserver` are fine. See `docs/threading.md`.

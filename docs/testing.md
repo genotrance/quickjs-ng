@@ -18,6 +18,54 @@ split into six logical files:
 
 ---
 
+## Test selection and local commands
+
+`slow` (`pyproject.toml` `[tool.pytest.ini_options]`) is the only registered
+pytest marker, for tests that deliberately use expensive stress, timeout, or
+network behavior; this project has no `smoke` marker. Push/PR CI runs
+`pytest -m "not slow"`; full scheduled, manual, release, and wheel runs use no
+marker filter and include every test. CI passes `--durations=15` so the GitHub
+logs record per-test time. See [ci.md](ci.md#ci-mainyml) for the exact fast and
+full job matrices and when each one runs.
+
+**No test currently qualifies.** The whole suite takes about 1.73 s, and
+`test_no_memory_leak` (the only `tracemalloc` leak coverage) is a fast test that
+must run on every PR, so it is not marked. A test qualifies for `slow` only when
+it takes more than 5 s on CI or needs the network; check the `--durations=15`
+output in the CI logs before adding the marker.
+
+Run the same selections locally with [uv](https://docs.astral.sh/uv/):
+
+| Command | Runs |
+|---------|------|
+| `uv run --locked --no-default-groups --group test python -m pytest tests -m "not slow"` | Fast set, same as push/PR CI |
+| `uv run --locked --no-default-groups --group test python -m pytest tests` | Everything, same as the full matrix |
+| `uv run --locked --no-default-groups --group test python -m pytest tests -m slow` | Only the `slow`-marked tests |
+
+### Why the matrix is split
+
+This is a small project, and GitHub's macOS (and to a lesser degree Windows)
+runners are slow to queue and limited in free concurrent jobs, so the full
+interpreter x OS matrix on every push would make ordinary feedback slow and
+expensive. The shipped wheels are `cp310-abi3`, so a push only needs to prove
+the oldest and newest supported CPython, one free-threaded build, and PyPy
+still work; the full matrix — every supported interpreter on all three desktop
+OSes, plus native Linux ARM — still runs before every release so nothing ships
+untested, see [ci.md](ci.md#release-gate).
+
+### Free-threaded builds (3.13t / 3.14t / 3.15t)
+
+`setup.py` turns off the stable ABI (`Py_LIMITED_API`/abi3) when
+`Py_GIL_DISABLED` is set, so free-threaded interpreters get a version-specific
+extension compiled from source instead of the shared abi3 build — see
+[build.md](build.md#stable-abi-detection) for how that detection works. The
+full CI matrix tests 3.13t/3.14t/3.15t from source; the fast set tests 3.15t.
+`cibuildwheel` skips `cp*t-*` (`pyproject.toml` `[tool.cibuildwheel]`), so no
+free-threaded wheel is ever built or shipped — only the from-source CI path
+exercises these interpreters.
+
+---
+
 ## Adapted Tests
 
 Three categories of changes were needed when porting tests from the original
@@ -52,7 +100,7 @@ x86_64/i686):
 limit = 500
 
 # AFTER — set an explicit 64 KB JS stack; 300 frames overflows on every arch
-# (64-bit: overflows at ~89 frames; 32-bit i686: overflows at ~178 frames)
+# (64-bit GCC/Clang: ~89 frames; MSVC: ~17 frames; 32-bit i686: ~178 frames)
 f.set_max_stack_size(64 * 1024)
 with self.assertRaises(quickjs.StackOverflow):
     f(300)
@@ -60,6 +108,12 @@ with self.assertRaises(quickjs.StackOverflow):
 f.set_max_stack_size(256 * 1024)
 self.assertEqual(f(50), 50)
 ```
+
+`test_recursion_depth_margin` additionally requires `f(60)` to succeed in 256 KB,
+so a compiler or flag change that inflates the per-call C stack frame (MSVC
+`/O2 /GL` uses ~5.2 KB, which left a one-frame margin) fails loudly instead of
+making `test_deep_recursion` flaky. Windows builds use `/GL- /Os` to keep the
+frame near ~3.7 KB (about 70 frames at 256 KB).
 
 ---
 
@@ -85,6 +139,7 @@ A comprehensive test file covering modern JavaScript features:
 | `RegExpFeatures` | Named groups, dotAll flag, lookbehind, Unicode property escapes |
 | `StringMethods` | padStart/End, trimStart/End, matchAll, unicode |
 | `ObjectMethods` | entries, fromEntries, values, Object.assign |
+| `StringAndBigIntRepresentations` | Rope strings (large concatenations) and short/heap BigInts converted to Python |
 
 ---
 

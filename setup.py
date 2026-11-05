@@ -16,7 +16,7 @@ extra_link_args: list[str] = []
 
 if sys.platform == "win32":
     extra_link_args = ["-static"]
-    extra_compile_args = ["/std:c11"]
+    extra_compile_args = ["/std:c11", "/GL-", "/Os"]
     if _use_stable_abi:
         extra_compile_args += ["/DPy_LIMITED_API=0x030A0000"]
 else:
@@ -48,4 +48,9 @@ _quickjs = Extension(
     py_limited_api=_use_stable_abi,
 )
 
-setup(ext_modules=[_quickjs])
+# ``pyproject.toml`` cannot express this runtime-dependent wheel option.
+# Keep it aligned with the extension setting so free-threaded and PyPy wheels
+# retain their interpreter-specific ABI tags.
+_bdist_wheel_options = {"bdist_wheel": {"py_limited_api": "cp310"}} if _use_stable_abi else {}
+
+setup(ext_modules=[_quickjs], options=_bdist_wheel_options)

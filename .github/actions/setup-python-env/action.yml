@@ -11,6 +11,11 @@ inputs:
     required: true
     default: "0.9.28"
 
+  uv-sync-args:
+    description: "Extra arguments for uv sync (e.g. --no-default-groups --group test)"
+    required: false
+    default: ""
+
 runs:
   using: "composite"
   steps:
@@ -28,7 +33,7 @@ runs:
 
     - name: Install dependencies and build C extension
       run: |
-        uv sync --locked
+        uv sync --locked ${{ inputs.uv-sync-args }}
         uv pip install setuptools
         uv pip install -e .
       shell: bash

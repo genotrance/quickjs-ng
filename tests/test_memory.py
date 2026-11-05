@@ -13,6 +13,8 @@ if sys.implementation.name != "cpython":
 
 import tracemalloc
 
+import pytest
+
 import quickjs
 
 

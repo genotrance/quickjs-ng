@@ -33,7 +33,7 @@ Adding a C-level mutex to `Context` was considered and rejected:
 
 ---
 
-## Free-Threaded Python (3.13t / 3.14t)
+## Free-Threaded Python (3.13t / 3.14t / 3.15t)
 
 When the GIL is disabled the same threading rules apply. The two safe patterns
 (`Function` helper and context-per-thread) remain correct because they already
@@ -103,3 +103,11 @@ class Function:
         if own_executor:
             self._threadpool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 ```
+
+## Fork limitation
+
+`Function` objects and executors must be created after `fork()`. The worker
+thread does not survive a fork, so a child forked after the first `Function`
+use inherits a dead worker and hangs on its first call. The `spawn` and
+`forkserver` start methods are safe. Executor creation (including
+`threading.stack_size` changes) is serialized by one module-level lock.

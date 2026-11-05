@@ -17,9 +17,10 @@ can break reference cycles between `Context` and `Object` instances.
 
 ### Motivation
 
-By targeting the CPython **stable ABI** (`Py_LIMITED_API = 0x030A0000`), wheels
-are forward-compatible with all Python ≥ 3.10. Free-threaded builds (cp313t,
-cp314t) require separate wheels but benefit from the same stable API surface.
+On non-free-threaded CPython, targeting the **stable ABI**
+(`Py_LIMITED_API = 0x030A0000`) makes wheels forward-compatible with all Python
+≥ 3.10. Free-threaded builds (cp313t, cp314t, cp315t) use the full CPython API
+and require interpreter-specific wheels.
 
 ### What changes at the C level
 
@@ -36,16 +37,19 @@ cp314t) require separate wheels but benefit from the same stable API surface.
 | Type globals as `static PyTypeObject` | Type globals as `static PyObject *` |
 | `moduledef.m_size = sizeof(module_state)` | `moduledef.m_size = -1` (no per-module state) |
 
-### `#define Py_LIMITED_API`
+### `Py_LIMITED_API` build flag
 
-```c
-// CPython Stable ABI target: 3.10+
-#define Py_LIMITED_API 0x030A0000
-#include <Python.h>
+```python
+if _use_stable_abi:
+    extra_compile_args += ["-DPy_LIMITED_API=0x030A0000"]
 ```
 
-This define causes `Python.h` to expose only the stable API surface. Any use of
-an unstable symbol produces a compile error, preventing accidental ABI breakage.
+`setup.py` supplies this compiler flag only for non-free-threaded CPython,
+before `Python.h` is included. It causes `Python.h` to expose only the stable
+API surface, so any use of an unstable symbol produces a compile error. The
+flag is omitted for free-threaded CPython because its limited API leaves
+`PyObject` opaque, while this extension stores `PyObject_HEAD` in its instance
+structures.
 
 ### Type creation via `PyType_FromSpec`
 
@@ -227,6 +231,20 @@ if (strstr(cstring, "stack overflow") != NULL ||
     PyErr_Format(StackOverflow, ...);
 ```
 
+### `JSInterruptHandler` signature change (v0.18.0)
+
+quickjs-ng v0.18.0 changed the interrupt handler callback to receive a
+`JSContext *` instead of a `JSRuntime *`:
+
+| Version     | Signature                                                |
+|-------------|----------------------------------------------------------|
+| Before      | `int JSInterruptHandler(JSRuntime *rt, void *opaque)`    |
+| v0.18.0+    | `int JSInterruptHandler(JSContext *ctx, void *opaque)`   |
+
+`js_interrupt_handler` (used by `set_time_limit`) was updated to take
+`JSContext *ctx` to match. It does not otherwise need the context, since the
+elapsed time is tracked in the `InterruptData` struct passed as `opaque`.
+
 ---
 
 ## PyPy Support
@@ -245,9 +263,10 @@ _use_stable_abi = _is_cpython and not _freethreaded
 ```
 
 When `_use_stable_abi` is `False` (PyPy, free-threaded CPython), the
-`-DPy_LIMITED_API` compile flag and `py_limited_api=True` extension option are
-both omitted. The resulting `.so` carries the PyPy ABI tag
-(e.g. `_quickjs.pypy310-pp73-x86_64-linux-gnu.so`) rather than `abi3`.
+`-DPy_LIMITED_API` compile flag, `py_limited_api=True` extension option, and
+the `bdist_wheel` `py_limited_api` setting are all omitted. The resulting
+`.so` and wheel carry interpreter-specific ABI tags rather than `abi3` (for
+example, `_quickjs.pypy310-pp73-x86_64-linux-gnu.so` on PyPy).
 
 ### `runtime_gc` — portable `gc.collect()` call
 
@@ -308,3 +327,11 @@ struct module_state { int dummy; };
 `module.c` uses C99 features (loop-variable declarations, designated initialisers)
 that MSVC's default C89 mode rejects. Adding `/std:c11` to `extra_compile_args`
 on Windows resolves all these errors.
+
+### MSVC frame size needs `/GL-` and `/Os`
+
+With the default `/O2 /GL`, MSVC gives QuickJS's `JS_CallInternal` a ~5.2 KB C
+stack frame per JavaScript call, so the default 256 KB stack allows only ~50
+nested calls and the stack-limit tests had a one-frame margin. `setup.py` adds
+`/GL-` and `/Os` on Windows to bring this down to ~3.7 KB. See
+[build.md](build.md#compile-flags).

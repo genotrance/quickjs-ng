@@ -38,8 +38,8 @@ _use_stable_abi = _is_cpython and not _freethreaded
 
 | Runtime | `_use_stable_abi` | Reason |
 |---------|:-----------------:|---------|
-| CPython 3.10–3.14 | `True` | Standard case |
-| CPython 3.13t / 3.14t (free-threaded) | `False` | `Py_LIMITED_API` incompatible with `Py_GIL_DISABLED` |
+| CPython 3.10–3.15 | `True` | Standard case |
+| CPython 3.13t / 3.14t / 3.15t (free-threaded) | `False` | `Py_LIMITED_API` incompatible with `Py_GIL_DISABLED` |
 | PyPy | `False` | PyPy has its own ABI; does not honour `Py_LIMITED_API` |
 
 ### Compile flags
@@ -47,7 +47,7 @@ _use_stable_abi = _is_cpython and not _freethreaded
 ```python
 if sys.platform == "win32":
     extra_link_args = ["-static"]
-    extra_compile_args = ["/std:c11"]
+    extra_compile_args = ["/std:c11", "/GL-", "/Os"]
     if _use_stable_abi:
         extra_compile_args += ["/DPy_LIMITED_API=0x030A0000"]
 else:
@@ -61,6 +61,15 @@ else:
   preventing accidental ABI breakage. Omitted for PyPy and free-threaded builds.
 - **`/std:c11`** (Windows) — MSVC defaults to C89; this flag enables C99/C11
   features used throughout the codebase.
+- **`/GL-` and `/Os`** (Windows) — shrink the C stack frame QuickJS uses per
+  JavaScript call. With setuptools' default `/O2 /GL`, MSVC compiles
+  `JS_CallInternal` with a ~5.2 KB frame (about 736 bytes with GCC/Clang), so a
+  256 KB `set_max_stack_size` only allowed ~50 nested calls and
+  `test_deep_recursion` passed or failed by a single frame depending on where
+  the stack happened to start (it broke on Windows PyPy after an unrelated
+  change to `module.c`). `/GL-` plus `/Os` gives ~3.7 KB (about 70 nested calls
+  at 256 KB), with no measurable slowdown on a recursive benchmark.
+  `test_recursion_depth_margin` guards the margin.
 - **`-static`** (Windows) — static-links the MSVC runtime so the wheel does not
   depend on a specific MSVCRT DLL.
 - **`-Werror=incompatible-pointer-types`** (non-Windows) — catches pointer type
@@ -100,17 +109,19 @@ build-backend = "setuptools.build_meta"
 The original project used `hatchling`, which does not support C extensions
 defined in `setup.py`. Switched to `setuptools`.
 
-### Wheel tag
+### Wheel tag configuration
 
-```toml
-[tool.distutils.bdist_wheel]
-py_limited_api = "cp310"
+```python
+_bdist_wheel_options = (
+    {"bdist_wheel": {"py_limited_api": "cp310"}} if _use_stable_abi else {}
+)
+setup(..., options=_bdist_wheel_options)
 ```
 
-This tags the wheel `cp310-abi3-<platform>`, signalling to pip that the wheel
-is compatible with any CPython ≥ 3.10. Without this setting, setuptools would
-tag the wheel with the exact build interpreter (e.g. `cp313`), forcing a rebuild
-per version.
+`setup.py` supplies the wheel option only for non-free-threaded CPython. This
+tags those wheels `cp310-abi3-<platform>`, signalling to pip that they are
+compatible with any CPython ≥ 3.10. Free-threaded CPython and PyPy leave the
+option unset, so their wheels retain interpreter-specific tags.
 
 ### Removed compile-time macros
 
@@ -134,7 +145,9 @@ produce an sdist that fails to build after an upstream update.
 `upstream-quickjs` is pinned to an upstream tag, and `pyproject.toml` carries the
 matching `X.Y.Z.P` version (see [versioning.md](versioning.md)). Both are
 committed together on `main`, normally by `check-upstream.yml`, and
-`build.yml` builds exactly that commit without modifying either. Locally:
+`build.yml` builds exactly that commit without modifying either. After a
+successful publish, `back-merge.yml` merges `main` back into `devel`
+automatically (see [ci.md](ci.md#back-merge-back-mergeyml)). Locally:
 
 ```bash
 git submodule update --init
@@ -148,11 +161,19 @@ uv build   # sdist + wheel
 
 ## Wheel matrix
 
-cibuildwheel builds across all cp310+ interpreters and PyPy. For CPython,
-`setup.py` sets `py_limited_api=_use_stable_abi=True`, so each CPython build
-produces a `cp310-abi3` wheel that cibuildwheel then tests against cp311,
-cp312, cp313, cp314, etc. automatically. For PyPy, `_use_stable_abi=False` and
-a PyPy-tagged wheel is produced per PyPy version.
+cibuildwheel builds the oldest and newest supported CPython (3.10 and 3.15)
+and both shipped PyPy interpreters. 3.10 is supported until its end of life on
+2026-10-31 and is the build interpreter of the `cp310-abi3` wheel, so the wheel
+is always imported and tested on 3.10. For CPython,
+`setup.py` sets `py_limited_api=_use_stable_abi=True`, so both CPython builds
+produce the same `cp310-abi3` tag. cibuildwheel (v4.3.3
+`find_compatible_wheel` in `cibuildwheel/util/packaging.py`) builds `cp310`
+first, then finds the previously built abi3 wheel with a tag ≤ the current
+interpreter and logs `Found previously built wheel ... Skipping build step`;
+it only runs the tests on 3.15. One abi3 wheel per platform is produced, so
+there is no duplicate-filename conflict, and the wheel is tested at both ends
+of the ABI window. For PyPy,
+`_use_stable_abi=False` and a PyPy-tagged wheel is produced per PyPy version.
 
 Free-threaded builds (`cp*t-*`) are excluded via `skip = ["cp*t-*"]` because
 `Py_LIMITED_API` is currently incompatible with `Py_GIL_DISABLED`
@@ -163,17 +184,23 @@ Free-threaded builds are still tested in `main.yml`.
 |----------|------|:--------------:|:-----------:|-------|
 | Linux (glibc) | x86_64 | 1 (abi3) | 2 (pypy310, pypy311) | |
 | Linux (glibc) | i686 | 1 (abi3) | 2 | manylinux_2_28 |
-| Linux (glibc) | aarch64 | 1 (abi3) | 2 | manylinux_2_28, QEMU |
+| Linux (glibc) | aarch64 | 1 (abi3) | 2 | manylinux_2_28, native `ubuntu-24.04-arm` |
 | Linux (musl) | x86_64 | 1 (abi3) | — | musllinux; PyPy has no musl builds |
+| Linux (musl) | i686 | 1 (abi3) | — | musllinux; PyPy has no musl builds |
+| Linux (musl) | aarch64 | 1 (abi3) | — | musllinux; PyPy has no musl builds |
 | Windows | AMD64 | 1 (abi3) | 2 | MSVC |
-| Windows | x86 | 1 (abi3) | 2 | MSVC |
+| Windows | x86 | 1 (abi3) | — | MSVC; PyPy has no Windows x86 support |
 | macOS | arm64 | 1 (abi3) | 2 | Apple Silicon |
 
-**Total: 19 wheels** — 7 CPython abi3 wheels (one per platform/arch, each
-covers Python 3.10+) plus 12 PyPy wheels (pypy3.10 and pypy3.11 per
-platform/arch, manylinux only — PyPy has no musllinux support).
+**Total: 19 wheels** — 9 CPython abi3 wheels (one per platform/arch, each
+covers Python 3.10+) plus 10 PyPy wheels (pypy3.10 and pypy3.11 for Linux
+manylinux, Windows AMD64, and macOS arm64; PyPy has no musllinux or Windows
+x86 support).
 
 ## Dependency lock
+
+Dependency groups: `test` (pytest, pytest-cov) is what the CI test jobs sync;
+`dev` includes `test` plus pre-commit, mypy and ruff (default for `uv sync`).
 
 `uv.lock` is tracked in git and CI runs `uv sync --locked` / `uv run --locked`,
 so a stale lock fails the build. Dependabot opens grouped monthly PRs for
