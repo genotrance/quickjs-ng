@@ -33,6 +33,10 @@ add(3, 4)  # => 7
 ctx.add_callable("py_add", lambda a, b: a + b)
 ctx.eval("py_add(3, 4)")  # => 7
 
+# Compile once, load many times (skips parsing; bytecode is only valid for the same build)
+code = ctx.compile("function add(a, b) { return a + b; }")  # => bytes
+quickjs.Context().eval_bytecode(code)
+
 # Use the Function helper for thread-safe execution
 f = quickjs.Function("f", "function f(x) { return x * 2; }")
 f(21)  # => 42

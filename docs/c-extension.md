@@ -245,6 +245,26 @@ quickjs-ng v0.18.0 changed the interrupt handler callback to receive a
 `JSContext *ctx` to match. It does not otherwise need the context, since the
 elapsed time is tracked in the `InterruptData` struct passed as `opaque`.
 
+### `Context.compile` and `Context.eval_bytecode`
+
+QuickJS compiles every function of a script when it parses it, so loading a
+large bundle is almost all parsing. The engine can write the compiled script out
+(`JS_WriteObject`) and load it back later (`JS_ReadObject`), which skips that
+work, but the original wrapper did not expose either call. Two methods were
+added to `Context`:
+
+| Method | Engine calls | Result |
+|--------|--------------|--------|
+| `compile(code: str, name: str = "<input>") -> bytes` | `JS_Eval` with `JS_EVAL_FLAG_COMPILE_ONLY`, then `JS_WriteObject(..., JS_WRITE_OBJ_BYTECODE)` | the bytecode of a global script; nothing is run |
+| `eval_bytecode(data: bytes)` | `JS_ReadObject(..., JS_READ_OBJ_BYTECODE)`, then `JS_EvalFunction` | the result, converted like `eval`'s |
+
+The bytecode is only valid for the QuickJS build that wrote it: `eval_bytecode`
+raises `JSException` for bytecode from another build, and for data that is not
+bytecode or is truncated. Callers that cache the bytes should key the cache by
+the QuickJS version and fall back to `eval` when loading fails. Both methods
+take the GIL release/acquire path of `eval` (`prepare_call_js` /
+`end_call_js`). Tests are in `tests/test_bytecode.py`.
+
 ---
 
 ## PyPy Support
