@@ -9,6 +9,7 @@ split into six logical files:
 
 | File | Contents |
 |------|----------|
+| `tests/test_bytecode.py` | `Context.compile` / `Context.eval_bytecode`: round trip, fresh contexts, errors, invalid bytecode |
 | `tests/test_callable.py` | Python-callable-from-JS tests (`add_callable`) |
 | `tests/test_context.py` | Core `Context` API: eval, get/set, JSON, error handling, limits |
 | `tests/test_js_features.py` | ES2020–ES2023 features, async, generators, typed arrays, RegExp, etc. |

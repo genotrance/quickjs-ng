@@ -792,6 +792,64 @@ static PyObject *runtime_global_this(RuntimeData *self, void *closure) {
 }
 
 
+// _quickjs.Context.compile
+//
+// Compiles a Python string as a global script WITHOUT running it and returns the QuickJS bytecode as
+// `bytes`. QuickJS compiles every function when it parses a script, so for a large bundle nearly all of the
+// time of `eval` is spent here; `eval_bytecode` skips it. The bytecode is only valid for the same QuickJS
+// build (the loader raises otherwise), so callers should cache it by version and fall back to `eval`.
+static PyObject *runtime_compile(RuntimeData *self, PyObject *args) {
+	const char *code;
+	const char *name = "<input>";
+	if (!PyArg_ParseTuple(args, "s|s", &code, &name)) {
+		return NULL;
+	}
+	prepare_call_js(self);
+	JSValue function = JS_Eval(self->context, code, strlen(code), name,
+	                           JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+	if (JS_IsException(function)) {
+		end_call_js(self);
+		return quickjs_to_python(self, function);
+	}
+	size_t size = 0;
+	uint8_t *buffer = JS_WriteObject(self->context, &size, function, JS_WRITE_OBJ_BYTECODE);
+	JS_FreeValue(self->context, function);
+	end_call_js(self);
+	if (buffer == NULL) {
+		quickjs_exception_to_python(self->context);
+		return NULL;
+	}
+	PyObject *result = PyBytes_FromStringAndSize((const char *)buffer, (Py_ssize_t)size);
+	js_free(self->context, buffer);
+	return result;
+}
+
+// _quickjs.Context.eval_bytecode
+//
+// Runs bytecode made by `compile` as a global script, like `eval` would run its source, and returns the
+// result as a Python object. Raises if the bytecode is not from this QuickJS build.
+static PyObject *runtime_eval_bytecode(RuntimeData *self, PyObject *args) {
+	PyObject *data;
+	if (!PyArg_ParseTuple(args, "O", &data)) {
+		return NULL;
+	}
+	if (!PyBytes_Check(data)) {
+		PyErr_SetString(PyExc_TypeError, "bytecode must be bytes");
+		return NULL;
+	}
+	char *buffer;
+	Py_ssize_t size;
+	if (PyBytes_AsStringAndSize(data, &buffer, &size) < 0) {
+		return NULL;
+	}
+	prepare_call_js(self);
+	JSValue object = JS_ReadObject(self->context, (const uint8_t *)buffer, (size_t)size,
+	                               JS_READ_OBJ_BYTECODE);
+	JSValue value = JS_IsException(object) ? object : JS_EvalFunction(self->context, object);
+	end_call_js(self);
+	return quickjs_to_python(self, value);
+}
+
 // All methods of the _quickjs.Context class.
 static PyMethodDef runtime_methods[] = {
     {"eval", (PyCFunction)runtime_eval, METH_VARARGS, "Evaluates a Javascript string."},
@@ -799,6 +857,14 @@ static PyMethodDef runtime_methods[] = {
      (PyCFunction)runtime_module,
      METH_VARARGS,
      "Evaluates a Javascript string as a module."},
+    {"compile",
+     (PyCFunction)runtime_compile,
+     METH_VARARGS,
+     "Compiles a Javascript string to bytecode without running it. Returns bytes."},
+    {"eval_bytecode",
+     (PyCFunction)runtime_eval_bytecode,
+     METH_VARARGS,
+     "Runs bytecode made by compile()."},
     {"execute_pending_job", (PyCFunction)runtime_execute_pending_job, METH_NOARGS, "Executes a pending job."},
     {"parse_json", (PyCFunction)runtime_parse_json, METH_VARARGS, "Parses a JSON string."},
     {"get", (PyCFunction)runtime_get, METH_VARARGS, "Gets a Javascript global variable."},
