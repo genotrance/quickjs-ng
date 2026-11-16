@@ -276,10 +276,8 @@ README.
 **Size guard.** `JS_WriteObject` returns a `size_t`, but
 `PyBytes_FromStringAndSize` takes a signed `Py_ssize_t`. `compile` checks the
 size against `PY_SSIZE_T_MAX` first; if it is larger, it frees the QuickJS
-buffer and raises `OverflowError`. No real script gets that big, so the
-test-only private method `Context._compile_with_size_limit(code, name,
-max_size)` runs the same code with a smaller limit, so the tests can reach that
-path and check that the buffer is freed.
+buffer and raises `OverflowError`. No real script gets that big, so this
+branch has no test; it is covered by code review only.
 
 ---
 

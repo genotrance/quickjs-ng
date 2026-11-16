@@ -9,7 +9,7 @@ split into six logical files:
 
 | File | Contents |
 |------|----------|
-| `tests/test_bytecode.py` | `Context.compile` / `Context.eval_bytecode`: round trip, fresh contexts, errors, invalid bytecode, size-overflow guard, trust-boundary docs |
+| `tests/test_bytecode.py` | `Context.compile` / `Context.eval_bytecode`: round trip, fresh contexts, errors, invalid bytecode, `eval_bytecode` docstring trust warning, malformed-input robustness (subprocess-isolated), feature coverage, cross-context isolation, time/memory limits |
 | `tests/test_callable.py` | Python-callable-from-JS tests (`add_callable`) |
 | `tests/test_context.py` | Core `Context` API: eval, get/set, JSON, error handling, limits |
 | `tests/test_js_features.py` | ES2020–ES2023 features, async, generators, typed arrays, RegExp, etc. |
@@ -115,6 +115,45 @@ so a compiler or flag change that inflates the per-call C stack frame (MSVC
 `/O2 /GL` uses ~5.2 KB, which left a one-frame margin) fails loudly instead of
 making `test_deep_recursion` flaky. Windows builds use `/GL- /Os` to keep the
 frame near ~3.7 KB (about 70 frames at 256 KB).
+
+---
+
+## Bytecode Robustness Tests (`tests/test_bytecode.py`)
+
+`Context.eval_bytecode` loads unverified bytecode (see [c-extension.md](c-extension.md);
+`BytecodeTrustBoundaryDocs` checks the `eval_bytecode` docstring warning). Malformed input must
+not crash the process, even though it is never expected to be accepted. Four classes in
+`tests/test_bytecode.py` cover this and the rest of the `compile`/`eval_bytecode` surface:
+
+| Test class | What it exercises |
+|------------|-------------------|
+| `MalformedBytecodeSubprocess` | Empty bytes, truncated bytecode (several cut points), corrupted bytecode (single-byte flips at several offsets), and an altered version/header byte |
+| `FeatureCoverageViaBytecode` | Closures, async/await resolved through `execute_pending_job`, generators, classes with inheritance, and globals defined by bytecode staying visible afterwards |
+| `BytecodeIsolation` | Bytecode compiled in one `Context` run in a separate `Context`; confirms no global or closure state leaks either direction |
+| `BytecodeLimits` | `set_time_limit` interrupting an infinite loop and `set_memory_limit` raising during allocation-heavy bytecode, both run through `eval_bytecode`; the context stays usable afterwards |
+
+### Subprocess isolation for malformed input
+
+`MalformedBytecodeSubprocess` runs every malformed-input case in a `subprocess.run([sys.executable,
+"-c", ...], timeout=...)` child instead of calling `eval_bytecode` in the test process directly.
+`JS_ReadObject` does not verify its input, so a crafted or corrupted buffer could in principle
+crash or hang the interpreter; running each case in its own child means a crash only fails that
+one case (a non-zero/signal exit code) instead of taking down the rest of the suite, and a hang is
+bounded by the subprocess `timeout` instead of blocking `pytest` indefinitely.
+
+While writing these tests, probing showed that quickjs-ng's bytecode format carries a checksum
+over the whole buffer (`JS_WriteObjectAtoms`/`JS_ReadObjectAtoms` in `quickjs.c`), so almost every
+single-byte corruption is rejected by the checksum before any further parsing happens. No case
+added here was found to crash the interpreter; all raise a clean `quickjs.JSException` (or, for
+empty input, the same).
+
+### Separate runtime
+
+The API has no separate runtime object to test isolation against: `module.c`'s `runtime_new` creates a fresh
+`JSRuntime` for every `_quickjs.Context`, and there is no separate `Runtime` type or way to share
+one runtime across two `Context` objects. So "separate runtime" and "separate context" are the same
+case in this binding; `BytecodeIsolation.test_each_context_has_its_own_runtime` documents that
+with `assertFalse(hasattr(quickjs, "Runtime"))`.
 
 ---
 
