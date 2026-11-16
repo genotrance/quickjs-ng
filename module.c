@@ -798,12 +798,11 @@ static PyObject *runtime_global_this(RuntimeData *self, void *closure) {
 // `bytes`. QuickJS compiles every function when it parses a script, so for a large bundle nearly all of the
 // time of `eval` is spent here; `eval_bytecode` skips it. The bytecode is only valid for the same QuickJS
 // build (the loader raises otherwise), so callers should cache it by version and fall back to `eval`.
-static PyObject *runtime_compile(RuntimeData *self, PyObject *args) {
-	const char *code;
-	const char *name = "<input>";
-	if (!PyArg_ParseTuple(args, "s|s", &code, &name)) {
-		return NULL;
-	}
+//
+// `max_size` is the largest bytecode size that is turned into `bytes`. `compile` passes PY_SSIZE_T_MAX, since
+// `PyBytes_FromStringAndSize` takes a signed size; `_compile_with_size_limit` passes a smaller one so that
+// tests can reach the overflow path, which real scripts cannot.
+static PyObject *compile_with_size_limit(RuntimeData *self, const char *code, const char *name, size_t max_size) {
 	prepare_call_js(self);
 	JSValue function = JS_Eval(self->context, code, strlen(code), name,
 	                           JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
@@ -819,15 +818,50 @@ static PyObject *runtime_compile(RuntimeData *self, PyObject *args) {
 		quickjs_exception_to_python(self->context);
 		return NULL;
 	}
+	if (size > max_size) {
+		js_free(self->context, buffer);
+		PyErr_Format(PyExc_OverflowError, "bytecode is too large (%zu bytes)", size);
+		return NULL;
+	}
 	PyObject *result = PyBytes_FromStringAndSize((const char *)buffer, (Py_ssize_t)size);
 	js_free(self->context, buffer);
 	return result;
+}
+
+static PyObject *runtime_compile(RuntimeData *self, PyObject *args) {
+	const char *code;
+	const char *name = "<input>";
+	if (!PyArg_ParseTuple(args, "s|s", &code, &name)) {
+		return NULL;
+	}
+	return compile_with_size_limit(self, code, name, (size_t)PY_SSIZE_T_MAX);
+}
+
+// _quickjs.Context._compile_with_size_limit
+//
+// Test-only: `compile` with a caller-chosen size limit, to exercise the overflow guard.
+static PyObject *runtime_compile_with_size_limit(RuntimeData *self, PyObject *args) {
+	const char *code;
+	const char *name;
+	Py_ssize_t max_size;
+	if (!PyArg_ParseTuple(args, "ssn", &code, &name, &max_size)) {
+		return NULL;
+	}
+	if (max_size < 0) {
+		PyErr_SetString(PyExc_ValueError, "max_size must not be negative");
+		return NULL;
+	}
+	return compile_with_size_limit(self, code, name, (size_t)max_size);
 }
 
 // _quickjs.Context.eval_bytecode
 //
 // Runs bytecode made by `compile` as a global script, like `eval` would run its source, and returns the
 // result as a Python object. Raises if the bytecode is not from this QuickJS build.
+//
+// Trust boundary: JS_ReadObject does not verify bytecode, so crafted bytes can crash the process or corrupt
+// memory. Only load bytecode that trusted code produced with `compile` on the same QuickJS build/binary
+// configuration; never load bytecode from external or untrusted data.
 static PyObject *runtime_eval_bytecode(RuntimeData *self, PyObject *args) {
 	PyObject *data;
 	if (!PyArg_ParseTuple(args, "O", &data)) {
@@ -864,7 +898,13 @@ static PyMethodDef runtime_methods[] = {
     {"eval_bytecode",
      (PyCFunction)runtime_eval_bytecode,
      METH_VARARGS,
-     "Runs bytecode made by compile()."},
+     "Runs bytecode made by compile(). Only load bytecode produced by trusted code with the same QuickJS "
+     "build/binary configuration; never load bytecode from external or untrusted data, since it is not "
+     "verified and malformed bytecode can crash the process."},
+    {"_compile_with_size_limit",
+     (PyCFunction)runtime_compile_with_size_limit,
+     METH_VARARGS,
+     "Test-only: compile() with a maximum bytecode size."},
     {"execute_pending_job", (PyCFunction)runtime_execute_pending_job, METH_NOARGS, "Executes a pending job."},
     {"parse_json", (PyCFunction)runtime_parse_json, METH_VARARGS, "Parses a JSON string."},
     {"get", (PyCFunction)runtime_get, METH_VARARGS, "Gets a Javascript global variable."},
