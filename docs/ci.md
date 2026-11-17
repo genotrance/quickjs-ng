@@ -206,7 +206,7 @@ Re-running the workflow for the same commit is safe.
 | `ubuntu-24.04-arm` | aarch64 | `aarch64` | `manylinux_2_28`; native ARM runner |
 | `windows-latest` | x86_64 | `AMD64` | MSVC with `/std:c11` |
 | `windows-latest` | i686 | `x86` | MSVC with `/std:c11` |
-| `macos-14` | arm64 | `arm64` | Apple Silicon runner |
+| `macos-latest` | arm64 | `arm64` | Apple Silicon runner |
 
 `macos-13` (Intel x86_64) is excluded — that runner image is deprecated.
 

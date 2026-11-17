@@ -165,7 +165,7 @@ jobs:
           - os: windows-latest
             arch: i686
             cibw_archs: x86
-          - os: macos-14
+          - os: macos-latest
             arch: arm64
             cibw_archs: arm64
 
