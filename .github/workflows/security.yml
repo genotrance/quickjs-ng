@@ -1,0 +1,241 @@
+name: Security
+
+# Static security checks and a sanitizer test run for every pull request and
+# every push to the integration and release branches. The jobs hold no secrets
+# and a read-only token. Never trigger this with pull_request_target or
+# workflow_run. See docs/ci.md for each job and docs/testing.md to run them
+# locally.
+
+on:
+  pull_request:
+  push:
+    branches: [devel, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Tool versions are pinned exactly; bump them here. Downloaded binaries are
+# also pinned by SHA-256 (see the release's checksums file). Actions are pinned
+# by commit SHA and kept current by Dependabot's github-actions ecosystem.
+env:
+  ZIZMOR_VERSION: "1.32.0"
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  BANDIT_VERSION: "1.9.4"
+  # PyPI "cppcheck" wheel 1.5.3 bundles Cppcheck 2.22.0.
+  CPPCHECK_WHEEL_VERSION: "1.5.3"
+  SETUPTOOLS_VERSION: "84.2.1"
+  UV_VERSION: "0.9.28"
+
+jobs:
+  # Reports every zizmor finding, then fails on high severity findings only.
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ZIZMOR_TARGETS: .github/workflows .github/actions .github/dependabot.yml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: "false"
+
+      - name: Report all findings
+        run: |
+          # shellcheck disable=SC2086
+          uvx "zizmor==$ZIZMOR_VERSION" --no-progress --no-exit-codes $ZIZMOR_TARGETS
+
+      - name: Fail on high severity findings
+        run: |
+          # shellcheck disable=SC2086
+          uvx "zizmor==$ZIZMOR_VERSION" --no-progress --min-severity=high --format=github $ZIZMOR_TARGETS
+
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint
+        run: |
+          ARCHIVE="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$ARCHIVE" \
+            "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/$ARCHIVE"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$ARCHIVE" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/$ARCHIVE" -C "$RUNNER_TEMP" actionlint
+
+      # Uses the runner's shellcheck for the run: scripts.
+      - name: Lint workflows
+        run: '"$RUNNER_TEMP/actionlint" -color'
+
+  # Added dependencies only, so it needs the pull request's base and head.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
+  # Scans the pull request's commits, or the pushed range on a push (the whole
+  # history for a new branch or an unknown previous commit). Any finding fails.
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks
+        run: |
+          ARCHIVE="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$ARCHIVE" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS_VERSION/$ARCHIVE"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$ARCHIVE" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/$ARCHIVE" -C "$RUNNER_TEMP" gitleaks
+
+      - name: Scan commits
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+        run: |
+          RANGE=""
+          if [ "$EVENT_NAME" = pull_request ]; then
+            RANGE="$PR_BASE_SHA..$PR_HEAD_SHA"
+          elif git cat-file -e "$PUSH_BEFORE_SHA^{commit}" 2>/dev/null; then
+            RANGE="$PUSH_BEFORE_SHA..$PUSH_HEAD_SHA"
+          fi
+          echo "Scanning commit range: ${RANGE:-whole history}"
+          "$RUNNER_TEMP/gitleaks" git --no-banner --redact --verbose --exit-code 1 \
+            ${RANGE:+--log-opts="$RANGE"} .
+
+  # Reports every finding in the log (tests included), then fails on high
+  # severity findings with high confidence in the shipped and CI Python only.
+  # Tests use assert and run subprocesses by design.
+  bandit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BANDIT_TARGETS: quickjs setup.py .github/scripts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: "false"
+
+      - name: Report all findings
+        run: |
+          # shellcheck disable=SC2086
+          uvx "bandit==$BANDIT_VERSION" -r $BANDIT_TARGETS tests --exit-zero
+
+      - name: Fail on high severity, high confidence findings
+        run: |
+          # shellcheck disable=SC2086
+          uvx "bandit==$BANDIT_VERSION" -r $BANDIT_TARGETS --severity-level high --confidence-level high --quiet
+
+  # module.c only: the vendored upstream sources are included for type
+  # information but their findings are suppressed. Reports warnings and style
+  # findings, then fails on error severity findings only.
+  cppcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: "false"
+
+      - name: Report all findings
+        run: |
+          PY_INCLUDE=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["include"])')
+          uvx --from "cppcheck==$CPPCHECK_WHEEL_VERSION" cppcheck --version
+          uvx --from "cppcheck==$CPPCHECK_WHEEL_VERSION" cppcheck --quiet --std=c11 --inline-suppr \
+            --check-level=exhaustive --enable=warning,style,performance,portability \
+            -I upstream-quickjs -I "$PY_INCLUDE" \
+            --suppress='*:upstream-quickjs/*' --suppress='*:/usr/include/*' --suppress=missingIncludeSystem \
+            --template='{file}:{line}: {severity}: {id}: {message}' module.c
+
+      - name: Fail on error severity findings
+        run: |
+          PY_INCLUDE=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["include"])')
+          uvx --from "cppcheck==$CPPCHECK_WHEEL_VERSION" cppcheck --quiet --std=c11 --inline-suppr \
+            --check-level=exhaustive --error-exitcode=1 \
+            -I upstream-quickjs -I "$PY_INCLUDE" \
+            --suppress='*:upstream-quickjs/*' --suppress='*:/usr/include/*' --suppress=missingIncludeSystem \
+            --template='::error file={file},line={line}::{id}: {message}' module.c
+
+  # Builds the extension (module.c and the vendored engine) with AddressSanitizer
+  # and UndefinedBehaviorSanitizer and runs the whole test suite on one CPython.
+  # Any report fails the job. Leak detection is off: CPython does not free every
+  # object at exit, so LeakSanitizer would only report interpreter allocations.
+  sanitizers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: "false"
+
+      - name: Install test dependencies
+        run: |
+          uv venv --python "$(command -v python)" .venv
+          uv sync --locked --no-default-groups --group test --no-install-project
+          uv pip install "setuptools==$SETUPTOOLS_VERSION"
+
+      - name: Build the extension with sanitizers
+        env:
+          CFLAGS: -fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g -O1
+          LDFLAGS: -fsanitize=address,undefined
+        run: .venv/bin/python setup.py build_ext --inplace
+
+      - name: Run the tests under sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          PYTHONMALLOC: malloc
+        run: |
+          # The interpreter is not instrumented, so preload the runtimes.
+          LD_PRELOAD="$(gcc -print-file-name=libasan.so):$(gcc -print-file-name=libubsan.so)" \
+            .venv/bin/python -m pytest tests -p no:cacheprovider --durations=15

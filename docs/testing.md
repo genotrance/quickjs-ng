@@ -43,6 +43,54 @@ Run the same selections locally with [uv](https://docs.astral.sh/uv/):
 | `uv run --locked --no-default-groups --group test python -m pytest tests` | Everything, same as the full matrix |
 | `uv run --locked --no-default-groups --group test python -m pytest tests -m slow` | Only the `slow`-marked tests |
 
+## Security scanners and sanitizer build
+
+`security.yml` and `codeql.yml` ([ci.md](ci.md#security-checks)) run these on
+every pull request. To run them locally, use the versions pinned in the
+workflows' `env:` (shown here; actionlint and gitleaks are single binaries from
+their GitHub releases, and actionlint uses `shellcheck` from `PATH`):
+
+```bash
+uvx zizmor==1.32.0 .github/workflows .github/actions .github/dependabot.yml
+actionlint
+gitleaks git --redact .                          # whole history
+gitleaks git --redact --log-opts="origin/devel..HEAD" .   # your branch only
+uvx bandit==1.9.4 -r quickjs setup.py .github/scripts tests
+PY_INCLUDE=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["include"])')
+uvx --from cppcheck==1.5.3 cppcheck --quiet --std=c11 --check-level=exhaustive \
+  --enable=warning,style,performance,portability -I upstream-quickjs -I "$PY_INCLUDE" \
+  --suppress='*:upstream-quickjs/*' --suppress=missingIncludeSystem module.c
+```
+
+Sanitizer build and full test run (Linux, gcc; same as the `sanitizers` job):
+
+```bash
+uv sync --locked --no-default-groups --group test --no-install-project
+uv pip install setuptools
+CFLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g -O1" \
+LDFLAGS="-fsanitize=address,undefined" .venv/bin/python setup.py build_ext --inplace --force
+LD_PRELOAD="$(gcc -print-file-name=libasan.so):$(gcc -print-file-name=libubsan.so)" \
+ASAN_OPTIONS=detect_leaks=0:abort_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1 \
+UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 PYTHONMALLOC=malloc \
+  .venv/bin/python -m pytest tests -p no:cacheprovider
+```
+
+Rebuild normally afterwards (`uv pip install -e .` or `setup.py build_ext
+--inplace --force` without the flags): the instrumented module only loads with
+the sanitizer runtimes preloaded.
+
+CodeQL: download the CodeQL bundle from `github/codeql-action` releases, then
+
+```bash
+codeql database create db-cpp --language=c-cpp --build-mode=manual \
+  --command="python setup.py build_ext --inplace --force"
+codeql database create db-py --language=python --build-mode=none
+codeql database analyze db-cpp codeql/cpp-queries:codeql-suites/cpp-security-extended.qls \
+  --format=sarif-latest --output=cpp.sarif
+codeql database analyze db-py codeql/python-queries:codeql-suites/python-security-extended.qls \
+  --format=sarif-latest --output=py.sarif
+```
+
 ### Why the matrix is split
 
 This is a small project, and GitHub's macOS (and to a lesser degree Windows)

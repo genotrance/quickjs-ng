@@ -5,11 +5,17 @@ updates:
     schedule:
       interval: "monthly"
     target-branch: "devel"
+    # Wait a week before proposing a new release.
+    cooldown:
+      default-days: 7
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "monthly"
     target-branch: "devel"
+    # Wait a week before proposing a new release.
+    cooldown:
+      default-days: 7
     groups:
       uv-minor-patch:
         update-types:

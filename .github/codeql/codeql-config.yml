@@ -1,0 +1,8 @@
+name: quickjs-ng CodeQL configuration
+
+# The vendored engine in upstream-quickjs/ is still compiled and traced so the
+# data flow into and out of module.c is complete, but its alerts are filtered:
+# they belong to the upstream project (report them there), and a local run of
+# the security-extended suite produced only upstream engine findings.
+paths-ignore:
+  - upstream-quickjs

@@ -11,6 +11,11 @@
 - Keep `docs/` and `README.md` up to date with any changes made to the code, build system, or CI configuration.
 - Update `docs/ci.md` when workflows change, `docs/build.md` when the build system changes, `docs/c-extension.md` when the C extension changes, and `docs/testing.md` when test structure changes.
 
+## Outside pull requests
+
+- The reviewer of any outside pull request reads every scanner result (the `security.yml` jobs and CodeQL alerts) and addresses or justifies each finding before integrating.
+- A failing security check blocks integration. See `docs/ci.md` (Security checks).
+
 ## Scope discipline
 
 - Do not remove any capability or support unless explicitly asked by the user.
