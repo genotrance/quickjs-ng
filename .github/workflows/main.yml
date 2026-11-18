@@ -30,17 +30,21 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.sha || github.sha }}
           submodules: recursive
+          persist-credentials: false
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
@@ -76,9 +80,9 @@ jobs:
               ("ubuntu-latest", "windows-latest", "macos-latest"),
               ("3.10", "3.11", "3.12", "3.13", "3.14", "3.15", "3.13t", "3.14t", "3.15t", "pypy3.10", "pypy3.11"),
           ):
-              rows.append({"os": os_name, "python-version": python_version, "pytest-args": ""})
+              rows.append({"os": os_name, "python-version": python_version, "pytest-markers": ""})
           # Native ARM exercises the Linux-aarch64 path which the wheel workflow ships.
-          rows.append({"os": "ubuntu-24.04-arm", "python-version": "3.15", "pytest-args": ""})
+          rows.append({"os": "ubuntu-24.04-arm", "python-version": "3.15", "pytest-markers": ""})
           print("matrix=" + json.dumps({"include": rows}, separators=(",", ":")))
           print("mode=" + os.environ["MODE"])
           PY
@@ -88,14 +92,14 @@ jobs:
           import os
 
           rows = [
-              {"os": "ubuntu-latest", "python-version": "3.10", "pytest-args": "-m 'not slow'"},
-              {"os": "ubuntu-latest", "python-version": "3.15", "pytest-args": "-m 'not slow'"},
-              {"os": "ubuntu-latest", "python-version": "3.15t", "pytest-args": "-m 'not slow'"},
-              {"os": "ubuntu-latest", "python-version": "pypy3.11", "pytest-args": "-m 'not slow'"},
-              {"os": "windows-latest", "python-version": "3.15", "pytest-args": "-m 'not slow'"},
-              {"os": "windows-latest", "python-version": "pypy3.11", "pytest-args": "-m 'not slow'"},
-              {"os": "macos-latest", "python-version": "3.15", "pytest-args": "-m 'not slow'"},
-              {"os": "ubuntu-24.04-arm", "python-version": "3.15", "pytest-args": "-m 'not slow'"},
+              {"os": "ubuntu-latest", "python-version": "3.10", "pytest-markers": "not slow"},
+              {"os": "ubuntu-latest", "python-version": "3.15", "pytest-markers": "not slow"},
+              {"os": "ubuntu-latest", "python-version": "3.15t", "pytest-markers": "not slow"},
+              {"os": "ubuntu-latest", "python-version": "pypy3.11", "pytest-markers": "not slow"},
+              {"os": "windows-latest", "python-version": "3.15", "pytest-markers": "not slow"},
+              {"os": "windows-latest", "python-version": "pypy3.11", "pytest-markers": "not slow"},
+              {"os": "macos-latest", "python-version": "3.15", "pytest-markers": "not slow"},
+              {"os": "ubuntu-24.04-arm", "python-version": "3.15", "pytest-markers": "not slow"},
           ]
           print("matrix=" + json.dumps({"include": rows}, separators=(",", ":")))
           print("mode=" + os.environ["MODE"])
@@ -114,10 +118,11 @@ jobs:
         shell: bash
     steps:
       - name: Check out
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.sha || github.sha }}
           submodules: recursive
+          persist-credentials: false
 
       - name: Set up the environment
         uses: ./.github/actions/setup-python-env
@@ -126,4 +131,6 @@ jobs:
           uv-sync-args: --no-default-groups --group test
 
       - name: Run tests
-        run: uv run --locked --no-default-groups --group test python -m pytest tests ${{ matrix.pytest-args }} --durations=15 --cov --cov-config=pyproject.toml --cov-report=xml
+        env:
+          PYTEST_MARKERS: ${{ matrix.pytest-markers }}
+        run: uv run --locked --no-default-groups --group test python -m pytest tests ${PYTEST_MARKERS:+-m "$PYTEST_MARKERS"} --durations=15 --cov --cov-config=pyproject.toml --cov-report=xml

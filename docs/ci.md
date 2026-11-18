@@ -4,7 +4,7 @@
 
 ## Workflow Overview
 
-Five workflows live under `.github/workflows/`:
+Seven workflows live under `.github/workflows/`:
 
 | File | Trigger | Purpose |
 |------|---------|---------|
@@ -13,6 +13,8 @@ Five workflows live under `.github/workflows/`:
 | `check-upstream.yml` | Monthly cron (1st of month, 06:00 UTC), `workflow_dispatch` (`dry_run` input) | Detect a new upstream tag, commit to `main`, dispatch the (self-gated) wheel build, then call `back-merge.yml` once that build really publishes |
 | `back-merge.yml` | `workflow_call`, `workflow_dispatch` (`dry_run` input) | Merge `main` into `devel` after a release, or open a conflict pull request |
 | `python-support.yml` | Monthly cron (1st of month, 07:00 UTC), `workflow_dispatch` | Open or update one issue when the pinned cibuildwheel builds a CPython the classifiers lack, or no longer builds a listed one |
+| `security.yml` | Pull requests, push to `devel`/`main` | Workflow linting, dependency review, secret scanning, Bandit, cppcheck and a sanitizer test run — see [Security checks](#security-checks) |
+| `codeql.yml` | Pull requests, push to `devel`/`main`, weekly schedule | CodeQL code scanning for C and Python (advanced setup) |
 
 `check-upstream.yml`'s `schedule` trigger only runs from the repository's
 default branch, so the workflow *file* lives on `devel`, even though the
@@ -106,14 +108,15 @@ CPython (no stable ABI) and a Windows-only stack-frame regression
 ([c-extension.md](c-extension.md#msvc-frame-size-needs-gl--and-os)) once
 passed every fast job.
 
-Fast jobs run `pytest -m "not slow"`; the full matrix and wheel tests use no
+Fast jobs run `pytest -m "not slow"` (the matrix row's `pytest-markers`
+value, passed to the step through the environment); the full matrix and wheel tests use no
 marker filter and run every test. See
 [testing.md](testing.md#test-selection-and-local-commands) for what the `slow`
 marker means, why no test currently carries it, and the equivalent local
 commands.
 
 The composite action `.github/actions/setup-python-env`:
-- Sets `allow-prereleases: true` on `actions/setup-python@v5` so that new
+- Sets `allow-prereleases: true` on `actions/setup-python` (v5) so that new
   CPython releases and PyPy can be installed as they enter the support window.
 - Takes a `uv-sync-args` input appended to `uv sync --locked` (default empty:
   all default groups). The test matrix passes
@@ -171,7 +174,7 @@ Outputs: `sha`, `upstream_tag`, `version`, `publish`, `build`.
 **`build-sdist`** — Builds a source distribution with `pipx run build --sdist`.
 
 **`build-wheels`** — Matrix of 6 platform/arch combinations, each running
-`cibuildwheel@v4.3.3`. It builds and tests one `cp310-abi3` wheel on both the
+`cibuildwheel` v4.3.5. It builds and tests one `cp310-abi3` wheel on both the
 oldest and newest supported CPython, and builds/tests the two shipped PyPy
 wheels. The duplicate abi3 compatibility test does not add a shipped wheel.
 
@@ -459,6 +462,106 @@ upload and the tag, and the only effect is the gate plus a wheel build. A push
 to `main` with that version runs `setup` only (1 job, under a minute) and skips
 `full-ci`, builds, and publish. Confirm `full-ci` appears in the run and that
 the wheel jobs start only after it succeeds.
+
+## Security checks
+
+Every pull request (including fork pull requests) and every push to `devel`
+and `main` runs `security.yml` and `codeql.yml`. Both use only `pull_request`
+and `push` triggers, never `pull_request_target` or `workflow_run`, so pull
+request code runs without secrets and with a read-only token.
+
+### Hardening of all workflows
+
+- Every action is pinned by full commit SHA with a trailing `# vX.Y.Z`
+  comment. Dependabot's `github-actions` ecosystem updates the SHA and the
+  comment together; `dependabot.yml` sets a 7-day cooldown so new releases
+  are only proposed once they are a week old. `python-support.yml` reads the
+  cibuildwheel version from that comment.
+- Workflows default to `permissions: contents: read`; jobs that push, publish
+  or dispatch raise only what they need.
+- `actions/checkout` uses `persist-credentials: false` except in the three
+  jobs that push with the job token (`build.yml` publish: the release tag;
+  `back-merge.yml`: `devel` or a conflict branch; `check-upstream.yml` check:
+  `main`). Each keeps `persist-credentials: true` with an inline
+  `# zizmor: ignore[artipacked]` reason.
+- Expressions never expand inside `run:` scripts; values are passed through
+  `env:` instead (template injection).
+- Remaining zizmor findings are low severity `self-repository` hints
+  (`uses: ./...` could use the newer `$/...` syntax); they are reported, not
+  failing, and kept until actionlint and Dependabot support the new syntax.
+
+### `security.yml` jobs
+
+The job names below are the check names to require in branch protection
+(`dependency-review` only runs, and is only required, for pull requests).
+
+| Job | Checks | Fails on |
+|-----|--------|----------|
+| `zizmor` | zizmor over `.github/workflows`, `.github/actions` and `dependabot.yml`; the log lists every finding | High severity findings |
+| `actionlint` | actionlint (with the runner's shellcheck) over every workflow | Any finding |
+| `dependency-review` | `actions/dependency-review-action` on the pull request's dependency changes | High or critical vulnerabilities in added dependencies |
+| `gitleaks` | gitleaks over the pull request's commits, or the pushed range on a push (whole history for a new branch) | Any finding |
+| `bandit` | Bandit on `quickjs/`, `setup.py`, `.github/scripts` and (report only) `tests/` | High severity with high confidence outside `tests/` |
+| `cppcheck` | cppcheck on `module.c`; the vendored `upstream-quickjs/` sources are only read for types, their findings are suppressed | Error severity findings (warnings, style, performance and portability are reported) |
+| `sanitizers` | Builds the extension with `-fsanitize=address,undefined -fno-omit-frame-pointer` and runs the whole pytest suite on CPython 3.13 | Any ASan or UBSan report (`halt_on_error=1`, `-fno-sanitize-recover=undefined`) |
+
+Tests use `assert` and run subprocesses by design, so Bandit reports them
+without failing. The sanitizer job preloads the gcc ASan and UBSan runtimes
+because the interpreter is not instrumented, sets `PYTHONMALLOC=malloc` so
+ASan sees Python object allocations, and disables leak detection: CPython does
+not free every object at exit, so LeakSanitizer would only report interpreter
+allocations (`tests/test_memory.py` covers wrapper leaks). No suppression file
+is used. gitleaks needs no license key for a personal repository and uses its
+default rules; add a narrow, commented `.gitleaks.toml` allowlist only if a test
+fixture trips it.
+
+### CodeQL (`codeql.yml`)
+
+CodeQL uses *advanced setup* (a workflow in the repository) instead of
+GitHub's default setup: default setup does not analyse pull requests from
+forks, and advanced setup lets the C analysis compile the extension. The
+matrix renders the two checks to require: `Analyze (c-cpp)` and
+`Analyze (python)`. Both run the `security-extended` query suite. Python uses
+`build-mode: none`; C/C++ uses `build-mode: manual` and compiles `module.c` and
+the vendored engine with `setup.py build_ext`, exactly as a wheel build does.
+`.github/codeql/codeql-config.yml` filters alerts in `upstream-quickjs/` with
+`paths-ignore`: the engine is still compiled so data flow through it is
+complete, but its alerts belong to the upstream project. Results appear under
+Security → Code scanning, and a new alert fails the pull request's check.
+Default setup must stay disabled: it conflicts with an advanced setup
+workflow.
+
+### Bumping tool versions
+
+`security.yml`'s top-level `env:` pins every tool: `ZIZMOR_VERSION`,
+`BANDIT_VERSION`, `CPPCHECK_WHEEL_VERSION` (the PyPI `cppcheck` wheel, which
+bundles a fixed Cppcheck release), `SETUPTOOLS_VERSION` and `UV_VERSION`, plus
+`ACTIONLINT_VERSION`/`ACTIONLINT_SHA256` and
+`GITLEAKS_VERSION`/`GITLEAKS_SHA256` for the downloaded binaries. To bump a
+binary, take the new SHA-256 from the release's `checksums.txt`. `codeql.yml`
+pins `SETUPTOOLS_VERSION` separately. Run the local commands in
+[testing.md](testing.md#security-scanners-and-sanitizer-build) after a bump.
+
+### Repository settings
+
+These are enabled by the repository owner in the GitHub settings, not by a
+workflow:
+
+- Secret scanning with push protection.
+- Dependabot alerts (security updates stay off: the monthly version updates
+  in `dependabot.yml` propose fixes through the normal review path).
+- Private vulnerability reporting.
+- Code scanning default setup disabled (advanced setup above is used).
+- Branch protection on `devel` and `main` requiring the `security.yml` job
+  names above, `Analyze (c-cpp)` and `Analyze (python)`.
+
+### Reviewing outside pull requests
+
+The reviewer of an outside pull request reads every `security.yml` job
+result and every CodeQL alert for it and addresses or justifies each finding
+before integrating. A failing security check blocks integration.
+
+---
 
 ## Lock file enforcement
 
